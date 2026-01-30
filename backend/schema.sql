@@ -2,6 +2,7 @@
 -- Created for Supabase
 
 -- Drop existing tables if they exist (for fresh setup)
+DROP TABLE IF EXISTS launched_campaigns CASCADE;
 DROP TABLE IF EXISTS campaign_performance CASCADE;
 DROP TABLE IF EXISTS campaign_benchmark_comparison CASCADE;
 DROP TABLE IF EXISTS campaign_predictions CASCADE;
@@ -125,6 +126,32 @@ CREATE TABLE ad_benchmarks (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Launched Campaigns Table (stores manually posted ads)
+CREATE TABLE launched_campaigns (
+  id BIGSERIAL PRIMARY KEY,
+  campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  platform VARCHAR(100) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  budget DECIMAL(10, 2) NOT NULL,
+  duration BIGINT DEFAULT 30,
+  target_audience VARCHAR(255),
+  status VARCHAR(50) DEFAULT 'active',
+CREATE INDEX idx_launched_campaigns_campaign_id ON launched_campaigns(campaign_id);
+CREATE INDEX idx_launched_campaigns_platform ON launched_campaigns(platform);
+CREATE INDEX idx_launched_campaigns_created_at ON launched_campaigns(created_at DESC);
+  ctr DECIMAL(10, 4) DEFAULT 0,
+  cpc DECIMAL(10, 2) DEFAULT 0,
+  cpa DECIMAL(10, 2) DEFAULT 0,
+  impressions BIGINT DEFAULT 0,
+  clicks BIGINT DEFAULT 0,
+  conversions BIGINT DEFAULT 0,
+  media_urls TEXT[],
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  launched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Create Indexes
 CREATE INDEX idx_campaigns_status ON campaigns(status);
 CREATE INDEX idx_campaigns_created_at ON campaigns(created_at DESC);
@@ -143,6 +170,7 @@ ALTER TABLE campaign_audience ENABLE ROW LEVEL SECURITY;
 ALTER TABLE campaign_platforms ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_recommendations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE campaign_predictions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE launched_campaigns ENABLE ROW LEVEL SECURITY;
 ALTER TABLE campaign_performance ENABLE ROW LEVEL SECURITY;
 ALTER TABLE campaign_benchmark_comparison ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ad_benchmarks ENABLE ROW LEVEL SECURITY;
@@ -177,4 +205,9 @@ CREATE POLICY "campaign_benchmark_read" ON campaign_benchmark_comparison FOR SEL
 CREATE POLICY "campaign_benchmark_insert" ON campaign_benchmark_comparison FOR INSERT WITH CHECK (true);
 
 CREATE POLICY "ad_benchmarks_read" ON ad_benchmarks FOR SELECT USING (true);
+
+CREATE POLICY "launched_campaigns_read" ON launched_campaigns FOR SELECT USING (true);
+CREATE POLICY "launched_campaigns_insert" ON launched_campaigns FOR INSERT WITH CHECK (true);
+CREATE POLICY "launched_campaigns_update" ON launched_campaigns FOR UPDATE USING (true);
+CREATE POLICY "launched_campaigns_delete" ON launched_campaigns FOR DELETE USING (true);
 CREATE POLICY "ad_benchmarks_insert" ON ad_benchmarks FOR INSERT WITH CHECK (true);

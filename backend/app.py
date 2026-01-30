@@ -407,11 +407,7 @@ def generate_ai_suggestions(campaign_data):
         
         Format your response clearly with bullet points and specific recommendations.
         """
-        print("\navaliable models:")
-        models = genai.list_models()
-        for m in models:
-            print(f"- {m.name} (version: {m.version})")
-        print()
+       
         # Call Gemini API
         model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(context)
@@ -519,6 +515,127 @@ def health_check():
         'status': 'healthy',
         'timestamp': datetime.now().isoformat()
     }), 200
+
+
+# ==================== MANUAL POST ENDPOINT ====================
+
+@app.route('/api/manual-post', methods=['POST'])
+def manual_post():
+    """
+    Post an ad manually (without API integration)
+    Removes campaign from campaigns table and creates record in launched_campaigns table
+    """
+    try:
+        data = request.json
+        campaign_id = data.get('campaign_id')
+        
+        if not campaign_id:
+            return jsonify({'error': 'Campaign ID required'}), 400
+        
+        # Validate required fields
+        required_fields = ['platform', 'title', 'description', 'budget', 'duration']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+        
+        try:
+            # Get campaign details before deletion
+            campaign = supabase.table('campaigns').select('*').eq('id', campaign_id).execute()
+            if not campaign.data:
+                return jsonify({'error': 'Campaign not found'}), 404
+            
+            campaign_data = campaign.data[0]
+            
+            # Insert into launched_campaigns table with user-provided data
+            launched = supabase.table('launched_campaigns').insert({
+                'campaign_id': campaign_id,
+                'platform': data.get('platform'),
+                'title': data.get('title'),
+                'description': data.get('description'),
+                'budget': float(data.get('budget', 0)),
+                'duration': int(data.get('duration', 30)),
+                'target_audience': data.get('target_audience', ''),
+                'status': 'active',
+                'media_urls': data.get('media_urls', []),
+                'ctr': float(data.get('ctr', 0)) if data.get('ctr') else 0,
+                'cpc': float(data.get('cpc', 0)) if data.get('cpc') else 0,
+                'cpa': float(data.get('cpa', 0)) if data.get('cpa') else 0,
+                'impressions': int(data.get('impressions', 0)) if data.get('impressions') else 0,
+                'clicks': int(data.get('clicks', 0)) if data.get('clicks') else 0,
+                'conversions': int(data.get('conversions', 0)) if data.get('conversions') else 0,
+                'created_at': datetime.now().isoformat(),
+                'updated_at': datetime.now().isoformat(),
+                'launched_at': datetime.now().isoformat()
+            }).execute()
+            
+            # Delete from campaigns table
+            supabase.table('campaigns').delete().eq('id', campaign_id).execute()
+            
+            print(f"✅ Ad posted manually and campaign moved to launched_campaigns")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Ad posted successfully!',
+                'launched_campaign': launched.data[0] if launched.data else {}
+            }), 201
+            
+        except Exception as db_error:
+            print(f"❌ Database error: {db_error}")
+            return jsonify({'error': f'Database error: {str(db_error)}'}), 500
+            
+    except Exception as e:
+        print(f"❌ Error posting manually: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/launched-campaigns', methods=['GET'])
+def get_launched_campaigns():
+    """
+    Get all manually posted campaigns from launched_campaigns table
+    """
+    try:
+        result = supabase.table('launched_campaigns').select('*').order('created_at', desc=True).execute()
+        
+        return jsonify({
+            'success': True,
+            'launched_campaigns': result.data if result.data else [],
+            'total': len(result.data) if result.data else 0
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error getting launched campaigns: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/launched-campaigns/<campaign_id>', methods=['PUT'])
+def update_launched_campaign(campaign_id):
+    """
+    Update metrics for a launched campaign
+    """
+    try:
+        data = request.json
+        
+        metrics_update = {
+            'ctr': float(data.get('ctr', 0)) if data.get('ctr') else 0,
+            'cpc': float(data.get('cpc', 0)) if data.get('cpc') else 0,
+            'cpa': float(data.get('cpa', 0)) if data.get('cpa') else 0,
+            'impressions': int(data.get('impressions', 0)) if data.get('impressions') else 0,
+            'clicks': int(data.get('clicks', 0)) if data.get('clicks') else 0,
+            'conversions': int(data.get('conversions', 0)) if data.get('conversions') else 0,
+            'updated_at': datetime.now().isoformat()
+        }
+        
+        supabase.table('launched_campaigns').update(metrics_update).eq('id', campaign_id).execute()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Metrics updated successfully!',
+            'updated_metrics': metrics_update
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error updating metrics: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':
