@@ -1,0 +1,244 @@
+/* src/components/AnalyticsChart.css */
+.analytics-card {
+  background: linear-gradient(145deg, #1e293b, #1a2438);
+  border-radius: 20px;
+  padding: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  margin-top: 24px;
+  animation: slideIn 0.5s ease 0.2s forwards;
+  opacity: 0;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 32px;
+}
+
+.card-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: white;
+  margin-bottom: 8px;
+}
+
+.card-subtitle {
+  color: #94a3b8;
+  font-size: 14px;
+}
+
+.time-filters {
+  display: flex;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 6px;
+  border-radius: 12px;
+}
+
+.time-filter {
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.time-filter:hover {
+  color: white;
+}
+
+.time-filter.active {
+  background: linear-gradient(135deg, #4361ee, #7209b7);
+  color: white;
+}
+
+.chart-container {
+  display: flex;
+  height: 300px;
+  margin-bottom: 24px;
+}
+
+.chart-y-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-right: 20px;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  margin-right: 20px;
+}
+
+.y-tick {
+  text-align: right;
+}
+
+.y-label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.chart-bars {
+  display: flex;
+  justify-content: space-around;
+  align-items: flex-end;
+  flex: 1;
+  gap: 20px;
+}
+
+.chart-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+}
+
+.column-group {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  height: 100%;
+  padding-bottom: 30px;
+}
+
+.bar {
+  width: 40px;
+  border-radius: 6px 6px 0 0;
+  position: relative;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.bar:hover {
+  transform: translateY(-5px);
+  filter: brightness(1.2);
+}
+
+.bar:hover .bar-tooltip {
+  opacity: 1;
+  transform: translateY(-10px);
+}
+
+.revenue-bar {
+  background: linear-gradient(to top, #4361ee, #4cc9f0);
+}
+
+.clicks-bar {
+  background: linear-gradient(to top, #7209b7, #f72585);
+}
+
+.bar-tooltip {
+  position: absolute;
+  top: -40px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0;
+  transition: all 0.3s ease;
+  white-space: nowrap;
+}
+
+.bar-tooltip::after {
+  content: '';
+  position: absolute;
+  bottom: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid rgba(0, 0, 0, 0.9);
+}
+
+.x-label {
+  color: #94a3b8;
+  font-size: 14px;
+  font-weight: 500;
+  margin-top: 12px;
+}
+
+.chart-legend {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  margin-top: 24px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+.legend-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+}
+
+.legend-color.revenue {
+  background: linear-gradient(to right, #4361ee, #4cc9f0);
+}
+
+.legend-color.clicks {
+  background: linear-gradient(to right, #7209b7, #f72585);
+}
+
+.legend-color.conversions {
+  background: linear-gradient(to right, #f8961e, #f94144);
+}
+
+@media (max-width: 768px) {
+  .analytics-card {
+    padding: 20px;
+  }
+  
+  .card-header {
+    flex-direction: column;
+    gap: 16px;
+    align-items: flex-start;
+  }
+  
+  .time-filters {
+    width: 100%;
+    justify-content: center;
+  }
+  
+  .chart-container {
+    height: 250px;
+  }
+  
+  .bar {
+    width: 30px;
+  }
+  
+  .chart-legend {
+    flex-direction: column;
+    gap: 16px;
+    align-items: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .chart-container {
+    height: 200px;
+  }
+  
+  .bar {
+    width: 25px;
+  }
+  
+  .x-label {
+    font-size: 12px;
+  }
+}
