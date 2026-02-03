@@ -1,5 +1,63 @@
 const API_BASE_URL = 'http://localhost:8000';
 
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('auth_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
+export const authAPI = {
+  async signup(payload) {
+    const response = await fetch(`${API_BASE_URL}/api/auth/signup`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to sign up');
+    }
+
+    return response.json();
+  },
+
+  async login(payload) {
+    const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to login');
+    }
+
+    return response.json();
+  },
+
+  async getMe() {
+    const response = await fetch(`${API_BASE_URL}/api/me`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      }
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to fetch user');
+    }
+
+    return response.json();
+  }
+};
+
 export const campaignAPI = {
   // ==================== CAMPAIGN ENDPOINTS ====================
   
@@ -10,6 +68,7 @@ export const campaignAPI = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders()
       },
       body: JSON.stringify(campaignData)
     });
@@ -31,6 +90,7 @@ export const campaignAPI = {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders()
       }
     });
     
@@ -51,6 +111,7 @@ export const campaignAPI = {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders()
       }
     });
     
@@ -71,6 +132,7 @@ export const campaignAPI = {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders()
       },
       body: JSON.stringify(campaignData)
     });
@@ -92,6 +154,7 @@ export const campaignAPI = {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders()
       }
     });
     
@@ -112,6 +175,7 @@ export const campaignAPI = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders()
       }
     });
     
@@ -134,6 +198,7 @@ export const campaignAPI = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders()
       }
     });
     

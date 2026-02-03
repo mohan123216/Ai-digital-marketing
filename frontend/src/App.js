@@ -1,22 +1,69 @@
 // src/App.js
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import './styles/App.css';
 import Navbar from './components/Navbar';
 import StatsCards from './components/StatsCards';
 import AnalyticsChart from './components/AnalyticsChart';
 import CampaignWizard from './components/CampaignWizard';
 import AIRecommendations from './components/AIRecommendations';
+import AuthPage from './components/AuthPage';
+import { authAPI } from './services/api';
 
 function App() {
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      setAuthLoading(false);
+      return;
+    }
+
+    authAPI.getMe()
+      .then((result) => {
+        if (result?.user) {
+          setUser(result.user);
+        }
+      })
+      .catch(() => {
+        localStorage.removeItem('auth_token');
+        setUser(null);
+      })
+      .finally(() => {
+        setAuthLoading(false);
+      });
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem('auth_token');
+    setUser(null);
+  };
+
+  if (authLoading) {
+    return (
+      <div className="auth-loading">
+        <div className="auth-loading-card">
+          <i className="fas fa-circle-notch fa-spin"></i>
+          <p>Loading your workspace...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthPage onAuthSuccess={setUser} />;
+  }
+
   return (
     <div className="App">
-      <Navbar />
+      <Navbar user={user} onLogout={handleLogout} />
       
       <main className="main-content">
         <div className="container">
           {/* Welcome Section */}
           <div className="welcome-section">
-            <h1>Welcome back, <span className="gradient-text">John</span> 👋</h1>
+            <h1>Welcome back, <span className="gradient-text">{user.name || user.email}</span> 👋</h1>
             <p className="subtitle">Here's what's happening with your campaigns today</p>
           </div>
 

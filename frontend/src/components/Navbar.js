@@ -2,9 +2,11 @@
 import React, { useState } from 'react';
 import './Navbar.css';
 
-function Navbar() {
+function Navbar({ user, onLogout }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [notifications] = useState(3);
+
+  const avatarSeed = encodeURIComponent(user?.name || user?.email || 'User');
 
   return (
     <nav className="navbar">
@@ -58,14 +60,16 @@ function Navbar() {
           {/* User Profile */}
           <div className="user-profile">
             <div className="avatar">
-              <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=John" alt="User" />
+              <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${avatarSeed}`} alt="User" />
               <span className="status online"></span>
             </div>
             <div className="user-info">
-              <p className="user-name">John Marketing</p>
-              <p className="user-role">Premium User</p>
+              <p className="user-name">{user?.name || user?.email || 'User'}</p>
+              <p className="user-role">Active Workspace</p>
             </div>
-            <i className="fas fa-chevron-down"></i>
+            <button className="logout-btn" onClick={onLogout} type="button">
+              Logout
+            </button>
           </div>
         </div>
       </div>

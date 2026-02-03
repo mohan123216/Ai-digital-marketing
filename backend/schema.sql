@@ -1,6 +1,9 @@
 -- SQL Schema for AI Digital Marketing Campaign Database
 -- Created for Supabase
 
+-- Enable required extensions
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
 -- Drop existing tables if they exist (for fresh setup)
 DROP TABLE IF EXISTS campaign_performance CASCADE;
 DROP TABLE IF EXISTS campaign_benchmark_comparison CASCADE;
@@ -10,10 +13,21 @@ DROP TABLE IF EXISTS campaign_platforms CASCADE;
 DROP TABLE IF EXISTS campaign_audience CASCADE;
 DROP TABLE IF EXISTS campaigns CASCADE;
 DROP TABLE IF EXISTS ad_benchmarks CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+
+-- Users Table
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255),
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 -- Main Campaigns Table
 CREATE TABLE campaigns (
   id BIGSERIAL PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   product_name VARCHAR(255) NOT NULL,
   product_type VARCHAR(100) NOT NULL,
   goal VARCHAR(100) NOT NULL,
@@ -128,6 +142,7 @@ CREATE TABLE ad_benchmarks (
 -- Create Indexes
 CREATE INDEX idx_campaigns_status ON campaigns(status);
 CREATE INDEX idx_campaigns_created_at ON campaigns(created_at DESC);
+CREATE INDEX idx_campaigns_user_id ON campaigns(user_id);
 CREATE INDEX idx_campaign_audience_campaign_id ON campaign_audience(campaign_id);
 CREATE INDEX idx_campaign_platforms_campaign_id ON campaign_platforms(campaign_id);
 CREATE INDEX idx_ai_recommendations_campaign_id ON ai_recommendations(campaign_id);
@@ -146,12 +161,17 @@ ALTER TABLE campaign_predictions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE campaign_performance ENABLE ROW LEVEL SECURITY;
 ALTER TABLE campaign_benchmark_comparison ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ad_benchmarks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 
 -- Create policies for public access (if needed - modify based on your security requirements)
 CREATE POLICY "campaigns_read" ON campaigns FOR SELECT USING (true);
 CREATE POLICY "campaigns_create" ON campaigns FOR INSERT WITH CHECK (true);
 CREATE POLICY "campaigns_update" ON campaigns FOR UPDATE USING (true);
 CREATE POLICY "campaigns_delete" ON campaigns FOR DELETE USING (true);
+
+-- Users policies (adjust for production)
+CREATE POLICY "users_read" ON users FOR SELECT USING (true);
+CREATE POLICY "users_insert" ON users FOR INSERT WITH CHECK (true);
 
 -- Similar policies for other tables
 CREATE POLICY "campaign_audience_read" ON campaign_audience FOR SELECT USING (true);

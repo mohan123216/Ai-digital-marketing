@@ -1,11 +1,14 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
+import jwt
+from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
 from database import (
     supabase,
     create_campaign,
@@ -18,6 +21,168 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+# ==================== AUTH CONFIG ====================
+JWT_SECRET = os.getenv("JWT_SECRET", os.getenv("SECRET_KEY", "dev-secret-change-me"))
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRES_HOURS = int(os.getenv("JWT_EXPIRES_HOURS", "24"))
+
+
+def create_access_token(user):
+    payload = {
+        "sub": user["id"],
+        "email": user.get("email"),
+        "name": user.get("name"),
+        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRES_HOURS)
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def get_bearer_token():
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header.replace("Bearer ", "", 1).strip()
+    return None
+
+
+def get_user_from_token(token):
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+        response = supabase.table("users").select("id, name, email").eq("id", user_id).execute()
+        if not response.data:
+            return None
+        return response.data[0]
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+
+
+def require_auth(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        token = get_bearer_token()
+        if not token:
+            return jsonify({"error": "Missing or invalid authorization token"}), 401
+        user = get_user_from_token(token)
+        if not user:
+            return jsonify({"error": "Invalid or expired token"}), 401
+        g.current_user = user
+        return fn(*args, **kwargs)
+    return wrapper
+
+# ==================== HEALTH CHECK ====================
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'message': 'AI Digital Marketing Backend is running',
+        'api_version': '1.0'
+    }), 200
+
+
+# ==================== AUTH ENDPOINTS ====================
+
+@app.route('/api/auth/signup', methods=['POST'])
+def signup():
+    """
+    Create a new user account
+    Expected JSON: { "name": "...", "email": "...", "password": "..." }
+    """
+    try:
+        data = request.json or {}
+        name = data.get('name', '').strip()
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
+
+        if not email or not password:
+            return jsonify({'error': 'Email and password are required'}), 400
+
+        existing = supabase.table('users').select('id').eq('email', email).execute()
+        if existing.data:
+            return jsonify({'error': 'Email is already registered'}), 409
+
+        password_hash = generate_password_hash(password)
+        response = supabase.table('users').insert({
+            'name': name or email.split('@')[0],
+            'email': email,
+            'password_hash': password_hash
+        }).execute()
+
+        user = response.data[0]
+        token = create_access_token(user)
+
+        return jsonify({
+            'success': True,
+            'token': token,
+            'user': {
+                'id': user['id'],
+                'name': user.get('name'),
+                'email': user.get('email')
+            }
+        }), 201
+
+    except Exception as e:
+        print(f"❌ Error during signup: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """
+    Login user
+    Expected JSON: { "email": "...", "password": "..." }
+    """
+    try:
+        data = request.json or {}
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
+
+        if not email or not password:
+            return jsonify({'error': 'Email and password are required'}), 400
+
+        response = supabase.table('users').select('*').eq('email', email).execute()
+        if not response.data:
+            return jsonify({'error': 'Invalid credentials'}), 401
+
+        user = response.data[0]
+        if not check_password_hash(user.get('password_hash', ''), password):
+            return jsonify({'error': 'Invalid credentials'}), 401
+
+        token = create_access_token(user)
+
+        return jsonify({
+            'success': True,
+            'token': token,
+            'user': {
+                'id': user['id'],
+                'name': user.get('name'),
+                'email': user.get('email')
+            }
+        }), 200
+
+    except Exception as e:
+        print(f"❌ Error during login: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/me', methods=['GET'])
+@require_auth
+def get_current_user():
+    """Return the current authenticated user"""
+    user = g.current_user
+    return jsonify({
+        'success': True,
+        'user': {
+            'id': user['id'],
+            'name': user.get('name'),
+            'email': user.get('email')
+        }
+    }), 200
 
 # Configure Gemini AI
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
@@ -36,6 +201,7 @@ except Exception as e:
 # ==================== CAMPAIGN ENDPOINTS ====================
 
 @app.route('/api/campaigns', methods=['POST'])
+@require_auth
 def create_new_campaign():
     """
     Create a new campaign with product info and campaign details
@@ -58,6 +224,7 @@ def create_new_campaign():
     """
     try:
         data = request.json
+        user = g.current_user
         
         # Validate required fields
         required_fields = ['productName', 'productType', 'goal', 'budget', 'audience', 'platforms']
@@ -67,6 +234,7 @@ def create_new_campaign():
         
         # Prepare campaign data for database
         campaign_data = {
+            'user_id': user['id'],
             'product_name': data['productName'],
             'product_type': data['productType'],
             'goal': data['goal'],
@@ -120,13 +288,15 @@ def create_new_campaign():
 
 
 @app.route('/api/campaigns', methods=['GET'])
+@require_auth
 def get_all_campaigns():
     """
     Get all campaigns with their details
     """
     try:
         # Get all campaigns
-        campaigns_response = supabase.table('campaigns').select('*').execute()
+        user = g.current_user
+        campaigns_response = supabase.table('campaigns').select('*').eq('user_id', user['id']).execute()
         campaigns = campaigns_response.data if campaigns_response.data else []
         
         # Enrich each campaign with its related data
@@ -161,13 +331,15 @@ def get_all_campaigns():
 
 
 @app.route('/api/campaigns/<campaign_id>', methods=['GET'])
+@require_auth
 def get_campaign(campaign_id):
     """
     Get a specific campaign with all its details
     """
     try:
         # Get main campaign
-        campaign_response = supabase.table('campaigns').select('*').eq('id', campaign_id).execute()
+        user = g.current_user
+        campaign_response = supabase.table('campaigns').select('*').eq('id', campaign_id).eq('user_id', user['id']).execute()
         if not campaign_response.data:
             return jsonify({'error': 'Campaign not found'}), 404
         
@@ -208,12 +380,18 @@ def get_campaign(campaign_id):
 
 
 @app.route('/api/campaigns/<campaign_id>', methods=['PUT'])
+@require_auth
 def update_campaign(campaign_id):
     """
     Update campaign details
     """
     try:
         data = request.json
+        user = g.current_user
+
+        existing = supabase.table('campaigns').select('id').eq('id', campaign_id).eq('user_id', user['id']).execute()
+        if not existing.data:
+            return jsonify({'error': 'Campaign not found'}), 404
         
         # Update main campaign fields
         update_data = {}
@@ -271,11 +449,17 @@ def update_campaign(campaign_id):
 
 
 @app.route('/api/campaigns/<campaign_id>', methods=['DELETE'])
+@require_auth
 def delete_campaign(campaign_id):
     """
     Delete a campaign and all related data
     """
     try:
+        user = g.current_user
+        existing = supabase.table('campaigns').select('id').eq('id', campaign_id).eq('user_id', user['id']).execute()
+        if not existing.data:
+            return jsonify({'error': 'Campaign not found'}), 404
+
         # Delete related data first
         supabase.table('campaign_audience').delete().eq('campaign_id', campaign_id).execute()
         supabase.table('campaign_platforms').delete().eq('campaign_id', campaign_id).execute()
@@ -296,16 +480,22 @@ def delete_campaign(campaign_id):
 
 
 @app.route('/api/campaigns/<campaign_id>/launch', methods=['POST'])
+@require_auth
 def launch_campaign(campaign_id):
     """
     Launch a campaign (update status to active)
     """
     try:
+        user = g.current_user
+        existing = supabase.table('campaigns').select('id').eq('id', campaign_id).eq('user_id', user['id']).execute()
+        if not existing.data:
+            return jsonify({'error': 'Campaign not found'}), 404
+
         supabase.table('campaigns').update({
             'status': 'active',
             'launched_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat()
-        }).eq('id', campaign_id).execute()
+        }).eq('id', campaign_id).eq('user_id', user['id']).execute()
         
         return jsonify({
             'success': True,
@@ -421,9 +611,13 @@ def generate_ai_suggestions(campaign_data):
         # Store suggestions in database
         supabase.table('ai_recommendations').insert({
             'campaign_id': campaign_data.get('id'),
-            'recommendation_type': 'strategy',
-            'content': suggestions_text,
-            'score': 9.0
+            'title': 'AI Strategy Summary',
+            'description': suggestions_text,
+            'category': 'strategy',
+            'confidence_score': 90.0,
+            'impact_level': 'high',
+            'action_type': 'strategy',
+            'applied': False
         }).execute()
         
         return {
@@ -441,6 +635,7 @@ def generate_ai_suggestions(campaign_data):
 
 
 @app.route('/api/campaigns/<campaign_id>/ai-suggestions', methods=['GET', 'POST'])
+@require_auth
 def get_ai_suggestions(campaign_id):
     """
     Get AI-powered suggestions for a campaign
@@ -448,7 +643,8 @@ def get_ai_suggestions(campaign_id):
     """
     try:
         # Get campaign details
-        campaign_response = supabase.table('campaigns').select('*').eq('id', campaign_id).execute()
+        user = g.current_user
+        campaign_response = supabase.table('campaigns').select('*').eq('id', campaign_id).eq('user_id', user['id']).execute()
         
         if not campaign_response.data:
             return jsonify({'error': 'Campaign not found'}), 404
@@ -491,11 +687,17 @@ def get_ai_suggestions(campaign_id):
 
 
 @app.route('/api/campaigns/<campaign_id>/recommendations', methods=['GET'])
+@require_auth
 def get_recommendations(campaign_id):
     """
     Get stored AI recommendations for a campaign
     """
     try:
+        user = g.current_user
+        existing = supabase.table('campaigns').select('id').eq('id', campaign_id).eq('user_id', user['id']).execute()
+        if not existing.data:
+            return jsonify({'error': 'Campaign not found'}), 404
+
         response = supabase.table('ai_recommendations').select('*').eq('campaign_id', campaign_id).execute()
         
         return jsonify({

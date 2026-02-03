@@ -38,6 +38,32 @@ body {
   overflow-x: hidden;
 }
 
+.auth-loading {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--dark-bg);
+}
+
+.auth-loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 32px;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+  color: var(--text-secondary);
+}
+
+.auth-loading-card i {
+  font-size: 26px;
+  color: var(--primary-color);
+}
+
 /* FIXED: Gradient Text with Compatibility */
 .gradient-text {
   background: var(--gradient-primary);
