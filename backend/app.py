@@ -15,6 +15,7 @@ from database import (
     get_campaign_by_id,
     update_campaign_status
 )
+from planning_agent import get_campaign_plan
 
 # Load environment variables
 load_dotenv()
@@ -275,11 +276,42 @@ def create_new_campaign():
         
         print(f"✅ Campaign created successfully: {campaign_id}")
         
+        # ==================== PLANNING AGENT ====================
+        # Step 1: Call Planning Agent to generate campaign plan
+        print(f"📌 Triggering Planning Agent for campaign {campaign_id}...")
+        agent_input = {
+            'product_name': data['productName'],
+            'product_type': data['productType'],
+            'goal': data['goal'],
+            'budget': float(data['budget']),
+            'duration': int(data.get('duration', 30)),
+            'platforms': data.get('platforms', []),
+            'audience': audience_data
+        }
+        
+        campaign_plan = get_campaign_plan(agent_input)
+        
+        # Step 2: Store plan in database
+        if campaign_plan.get('success'):
+            try:
+                supabase.table('campaign_plans').insert({
+                    'campaign_id': campaign_id,
+                    'plan_data': json.dumps(campaign_plan['plan']),
+                    'benchmarks': json.dumps(campaign_plan['benchmarks']),
+                    'raw_response': campaign_plan.get('raw_llm_response', ''),
+                    'created_at': datetime.now().isoformat()
+                }).execute()
+                print(f"✅ Campaign plan saved to database")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not save plan to database: {e}")
+        
         return jsonify({
             'success': True,
             'campaign_id': campaign_id,
-            'message': 'Campaign created successfully',
-            'campaign': campaign
+            'message': 'Campaign created successfully with AI plan',
+            'campaign': campaign,
+            'plan': campaign_plan.get('plan', {}),
+            'benchmarks': campaign_plan.get('benchmarks', {})
         }), 201
         
     except Exception as e:
@@ -545,6 +577,70 @@ def get_historical_performance(platform=None, product_type=None, target_audience
     return stats
 
 
+def _format_suggestions_short(text, max_lines=7):
+    """Normalize and shorten LLM text into clean bullet lines."""
+    if not text:
+        return ""
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    cleaned = []
+    for line in lines:
+        # Remove common bullet/number prefixes and normalize whitespace.
+        line = line.lstrip("-*").strip()
+        if len(line) >= 2 and line[0].isdigit() and line[1] in {".", ")"}:
+            line = line[2:].strip()
+        cleaned.append(" ".join(line.split()))
+
+    short_lines = cleaned[:max_lines]
+    return "\n".join([f"- {line}" for line in short_lines])
+
+
+def _format_suggestions_structured(text):
+    """Format LLM JSON output into labeled short bullet lines."""
+    if not text:
+        return ""
+
+    payload = None
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            payload = None
+    else:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                payload = json.loads(stripped[start:end + 1])
+            except json.JSONDecodeError:
+                payload = None
+
+    if not isinstance(payload, dict):
+        return _format_suggestions_short(text, max_lines=7)
+
+    labels = [
+        ("suggested_platform", "Suggested Platform"),
+        ("suggested_budget", "Suggested Budget"),
+        ("suggested_audience", "Suggested Audience"),
+        ("suggested_content", "Suggested Content"),
+        ("suggested_timing", "Suggested Timing"),
+        ("suggested_kpis", "Suggested KPIs"),
+        ("suggested_risks", "Suggested Risks"),
+    ]
+
+    lines = []
+    for key, label in labels:
+        value = payload.get(key)
+        if not value:
+            continue
+        if isinstance(value, list):
+            value = ", ".join([str(item) for item in value if item])
+        lines.append(f"- {label}: {str(value).strip()}")
+
+    return "\n".join(lines[:7])
+
+
 def generate_ai_suggestions(campaign_data):
     """
     Generate AI suggestions using Gemini based on campaign data and historical performance
@@ -585,24 +681,22 @@ def generate_ai_suggestions(campaign_data):
         HISTORICAL MARKET DATA (from real campaigns):
         {json.dumps(historical_insights, indent=2)}
         
-        Based on this data and historical performance patterns, provide:
-        1. Platform Strategy - Best platform recommendations with reasoning
-        2. Audience Insights - Key audience segments to target
-        3. Budget Allocation - How to split budget across platforms
-        4. Expected Performance - Realistic ROI and conversion rate estimates
-        5. Content Recommendations - Type of content that works best
-        6. Timing Strategy - Best days/times to run ads
-        7. Risk Mitigation - Potential pitfalls and how to avoid them
-        8. Success Metrics - KPIs to track
-        
-        Format your response clearly with bullet points and specific recommendations.
+        Based on this data and historical performance patterns, respond ONLY with a JSON object
+        using these keys and short values (under 18 words each):
+        - suggested_platform
+        - suggested_budget
+        - suggested_audience
+        - suggested_content
+        - suggested_timing
+        - suggested_kpis
+        - suggested_risks
         """
        
         # Call Gemini API
         model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(context)
         
-        suggestions_text = response.text
+        suggestions_text = _format_suggestions_structured(response.text)
         
         # Store suggestions in database
         supabase.table('ai_recommendations').insert({
@@ -628,6 +722,45 @@ def generate_ai_suggestions(campaign_data):
             'success': False,
             'error': str(e)
         }
+
+
+# ==================== CAMPAIGN PLANNING ====================
+
+@app.route('/api/campaigns/<campaign_id>/plan', methods=['GET'])
+@require_auth
+def get_campaign_plan_endpoint(campaign_id):
+    """
+    Get the AI-generated plan for a campaign
+    """
+    try:
+        user = g.current_user
+        
+        # Verify campaign exists and belongs to user
+        campaign_response = supabase.table('campaigns').select('*').eq('id', campaign_id).eq('user_id', user['id']).execute()
+        if not campaign_response.data:
+            return jsonify({'error': 'Campaign not found'}), 404
+        
+        # Get the campaign plan
+        plan_response = supabase.table('campaign_plans').select('*').eq('campaign_id', campaign_id).execute()
+        
+        if not plan_response.data:
+            return jsonify({
+                'success': False,
+                'message': 'No plan generated yet for this campaign'
+            }), 404
+        
+        plan = plan_response.data[0]
+        
+        return jsonify({
+            'success': True,
+            'plan': json.loads(plan['plan_data']) if isinstance(plan['plan_data'], str) else plan['plan_data'],
+            'benchmarks': json.loads(plan['benchmarks']) if isinstance(plan['benchmarks'], str) else plan['benchmarks'],
+            'created_at': plan['created_at']
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error fetching campaign plan: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/campaigns/<campaign_id>/ai-suggestions', methods=['GET', 'POST'])

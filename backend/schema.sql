@@ -96,6 +96,17 @@ CREATE TABLE campaign_predictions (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Campaign Plans Table (AI-generated plans from Planning Agent)
+CREATE TABLE campaign_plans (
+  id BIGSERIAL PRIMARY KEY,
+  campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  plan_data JSON NOT NULL,
+  benchmarks JSON NOT NULL,
+  raw_response TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Campaign Performance Table
 CREATE TABLE campaign_performance (
   id BIGSERIAL PRIMARY KEY,
@@ -213,6 +224,10 @@ CREATE POLICY "campaign_platforms_update" ON campaign_platforms FOR UPDATE USING
 CREATE POLICY "ai_recommendations_read" ON ai_recommendations FOR SELECT USING (true);
 CREATE POLICY "ai_recommendations_insert" ON ai_recommendations FOR INSERT WITH CHECK (true);
 CREATE POLICY "ai_recommendations_update" ON ai_recommendations FOR UPDATE USING (true);
+
+CREATE POLICY "campaign_plans_read" ON campaign_plans FOR SELECT USING (true);
+CREATE POLICY "campaign_plans_insert" ON campaign_plans FOR INSERT WITH CHECK (true);
+CREATE POLICY "campaign_plans_update" ON campaign_plans FOR UPDATE USING (true);
 
 CREATE POLICY "campaign_predictions_read" ON campaign_predictions FOR SELECT USING (true);
 CREATE POLICY "campaign_predictions_insert" ON campaign_predictions FOR INSERT WITH CHECK (true);
