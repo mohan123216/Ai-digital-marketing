@@ -44,4 +44,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  launchGoogleAds: (token, payload) =>
+    request("/api/v1/google-ads/launch", token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  launchMetaAds: (token, payload) =>
+    request("/api/v1/meta-ads/launch", token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getGoogleAdsLaunchStatus: (token, payload) =>
+    request("/api/v1/google-ads/launch-status", token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getMetaAdsLaunchStatus: (token, payload) =>
+    request("/api/v1/meta-ads/launch-status", token, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 };

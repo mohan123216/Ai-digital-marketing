@@ -28,7 +28,7 @@ body {
   font-family: "Plus Jakarta Sans", sans-serif;
   color: var(--ink);
   background-color: var(--bg-dark);
-  background-image: 
+  background-image:
     radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15), transparent 40%),
     radial-gradient(circle at 90% 80%, rgba(236, 72, 153, 0.15), transparent 40%),
     radial-gradient(circle at 50% 50%, rgba(139, 92, 246, 0.1), transparent 50%);
@@ -44,21 +44,17 @@ body::before {
   inset: 0;
   pointer-events: none;
   z-index: -1;
-  background: 
-    repeating-linear-gradient(
-      0deg,
+  background:
+    repeating-linear-gradient(0deg,
       rgba(255, 255, 255, 0.02) 0px,
       rgba(255, 255, 255, 0.02) 1px,
       transparent 1px,
-      transparent 30px
-    ),
-    repeating-linear-gradient(
-      90deg,
+      transparent 30px),
+    repeating-linear-gradient(90deg,
       rgba(255, 255, 255, 0.02) 0px,
       rgba(255, 255, 255, 0.02) 1px,
       transparent 1px,
-      transparent 30px
-    );
+      transparent 30px);
 }
 
 h1,
@@ -129,7 +125,10 @@ h3 {
 .auth-art::before {
   content: "";
   position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   border-radius: 32px;
   padding: 2px;
   background: linear-gradient(135deg, rgba(99, 102, 241, 0.5), transparent, rgba(236, 72, 153, 0.5));
@@ -245,8 +244,10 @@ button {
 button::after {
   content: "";
   position: absolute;
-  top: 0; left: -100%;
-  width: 50%; height: 100%;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
   transform: skewX(-20deg);
   transition: all 0.5s ease;
@@ -296,6 +297,23 @@ button.btn-launch {
 
 button.btn-launch:hover {
   box-shadow: 0 8px 25px rgba(16, 185, 129, 0.45);
+}
+
+.launched-badge {
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 12px;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  animation: fadeIn 0.4s ease-out forwards;
 }
 
 .alert {
@@ -394,7 +412,9 @@ button.btn-launch:hover {
 .prediction-item::before {
   content: "";
   position: absolute;
-  left: 0; top: 0; bottom: 0;
+  left: 0;
+  top: 0;
+  bottom: 0;
   width: 4px;
   background: linear-gradient(to bottom, var(--brand), var(--brand-3));
   border-radius: 4px 0 0 4px;
@@ -406,9 +426,17 @@ button.btn-launch:hover {
   opacity: 1;
 }
 
-.prediction-item:nth-child(1) { animation-delay: 0.1s; }
-.prediction-item:nth-child(2) { animation-delay: 0.2s; }
-.prediction-item:nth-child(3) { animation-delay: 0.3s; }
+.prediction-item:nth-child(1) {
+  animation-delay: 0.1s;
+}
+
+.prediction-item:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.prediction-item:nth-child(3) {
+  animation-delay: 0.3s;
+}
 
 .prediction-item h3 {
   font-size: 1.25rem;
@@ -593,7 +621,10 @@ button.btn-launch:hover {
 
 .spinner-inner {
   position: absolute;
-  top: 10px; left: 10px; right: 10px; bottom: 10px;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
   border-radius: 50%;
   border: 3px solid transparent;
   border-left-color: var(--success);
@@ -613,8 +644,13 @@ button.btn-launch:hover {
 
 /* Animations */
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes fadeSlideUp {
@@ -622,6 +658,7 @@ button.btn-launch:hover {
     transform: translateY(20px);
     opacity: 0;
   }
+
   to {
     transform: translateY(0);
     opacity: 1;
@@ -633,6 +670,7 @@ button.btn-launch:hover {
     transform: scale(0.95);
     opacity: 0;
   }
+
   to {
     transform: scale(1);
     opacity: 1;
@@ -640,23 +678,37 @@ button.btn-launch:hover {
 }
 
 @keyframes shine {
-  0% { left: -100%; }
-  20% { left: 200%; }
-  100% { left: 200%; }
+  0% {
+    left: -100%;
+  }
+
+  20% {
+    left: 200%;
+  }
+
+  100% {
+    left: 200%;
+  }
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 980px) {
   .auth-layout {
     grid-template-columns: 1fr;
   }
-  
+
   .auth-art {
-    display: none; /* Hide background art on mobile for focus */
+    display: none;
+    /* Hide background art on mobile for focus */
   }
 
   .grid {

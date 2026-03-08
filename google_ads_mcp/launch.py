@@ -72,7 +72,23 @@ def _load_google_client():
         config["login_customer_id"] = login_customer_id
     return GoogleAdsClient.load_from_dict(config)
 
+def _print_campaign_metrics(campaign_name: str, recommendation: Dict[str, Any]) -> None:
+    """Print campaign metrics before launch."""
+    metrics = {
+        "platform": recommendation.get("platform"),
+        "target_location": recommendation.get("target_location"),
+        "target_segment": recommendation.get("target_segment"),
+        "target_age_group": recommendation.get("target_age_group"),
+        "budget": recommendation.get("budget"),
+        "predicted_roi": recommendation.get("predicted_roi"),
+        "predicted_conversion_rate": recommendation.get("predicted_conversion_rate"),
+    }
 
+    print("\n========== CAMPAIGN METRICS ==========")
+    print(f"Campaign Name : {campaign_name}")
+    for k, v in metrics.items():
+        print(f"{k} : {v}")
+    print("======================================\n")
 def launch_selected_recommendation(
     campaign_id: str,
     recommendation: Dict[str, Any],
@@ -124,6 +140,7 @@ def launch_selected_recommendation(
         f"AI {segment} {location} {age_group} "
         f"ROI{predicted_roi} CR{predicted_conv} B{int(budget_usd)} {key}"
     )[:255]
+    _print_campaign_metrics(campaign_name, recommendation)
     try:
         if dry_run:
             resource_name = f"dryrun/customers/{customer_id}/campaigns/{key}"

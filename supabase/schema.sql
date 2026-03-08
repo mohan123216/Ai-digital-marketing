@@ -18,6 +18,7 @@ create table if not exists public.campaign_runs (
   predicted_roi numeric,
   input jsonb not null,
   output jsonb not null,
+  launched_platforms jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now()
 );
 
@@ -33,3 +34,7 @@ alter table public.campaign_runs drop constraint if exists campaign_runs_user_id
 alter table public.campaign_runs
   add constraint campaign_runs_user_id_fkey
   foreign key (user_id) references public.app_users(id) on delete cascade;
+
+-- Migration: add launched_platforms column if it does not exist yet
+alter table public.campaign_runs
+  add column if not exists launched_platforms jsonb not null default '[]'::jsonb;

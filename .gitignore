@@ -60,7 +60,7 @@ pnpm-debug.log*
 frontend/.env
 frontend/.env.*
 !frontend/.env.example
-
+meta_mcp/.env
 google_ads_mcp/.env
 *.pem
 *.key
@@ -80,7 +80,7 @@ models/*.bin
 # Google Ads MCP runtime state
 google_ads_mcp/launched_campaigns.json
 google_ads_mcp/sample_recommendation.json
-
+generate_refresh_token.py
 # Logs
 *.log
 logs/
