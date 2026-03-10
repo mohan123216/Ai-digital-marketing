@@ -33,11 +33,11 @@ class TargetAudience(BaseModel):
 class BudgetRange(BaseModel):
     min: float = Field(..., gt=0, description="Minimum budget in USD")
     max: float = Field(..., gt=0, description="Maximum budget in USD")
-    
+
     @property
     def average(self) -> float:
         return (self.min + self.max) / 2
-    
+
     @property
     def range_size(self) -> float:
         return self.max - self.min
@@ -107,7 +107,7 @@ class RecommendationResponse(BaseModel):
     insights: List[str]
     data_quality_score: float
     model_confidence: float
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class ModelMetrics(BaseModel):
@@ -152,3 +152,30 @@ class CampaignHistoryItem(BaseModel):
     top_platform: Optional[str] = None
     predicted_roi: Optional[float] = None
     output: Dict[str, Any]
+    launched_platforms: List[str] = Field(default_factory=list)
+
+
+class GoogleAdsLaunchRequest(BaseModel):
+    campaign_id: str
+    recommendation: Dict[str, Any]
+    customer_id: Optional[str] = None
+    budget_resource_name: Optional[str] = None
+    login_customer_id: Optional[str] = None
+    dry_run: bool = False
+
+
+class GoogleAdsLaunchStatusRequest(BaseModel):
+    campaign_id: str
+    recommendation: Dict[str, Any]
+
+
+class MetaAdsLaunchRequest(BaseModel):
+    campaign_id: str
+    recommendation: Dict[str, Any]
+    ad_account_id: Optional[str] = None
+    dry_run: bool = False
+
+
+class MetaAdsLaunchStatusRequest(BaseModel):
+    campaign_id: str
+    recommendation: Dict[str, Any]

@@ -11,6 +11,10 @@ from app.models.schemas import (
     AuthCredentials,
     AuthResponse,
     CampaignInput,
+    GoogleAdsLaunchRequest,
+    GoogleAdsLaunchStatusRequest,
+    MetaAdsLaunchRequest,
+    MetaAdsLaunchStatusRequest,
     ModelMetrics,
     UserProfile,
     CampaignHistoryItem,
@@ -19,10 +23,14 @@ from app.services.data_analyzer import DataAnalyzer
 from app.services.predictor import CampaignPredictor
 from app.services.recommendation_engine import RecommendationEngine
 from app.services.auth_service import create_access_token, hash_password, verify_password
-from app.services.llm_summarizer import summarize_ml_result
 from app.services.supabase_client import get_supabase_admin_client
 from app.services.user_store import create_user, get_user_by_email
 from app.dependencies.auth import get_current_user
+from google_ads_mcp.launch import get_recommendation_launch_status, launch_selected_recommendation
+from meta_mcp.launch import (
+    get_recommendation_launch_status as get_meta_recommendation_launch_status,
+    launch_selected_recommendation as launch_selected_meta_recommendation,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -54,6 +62,7 @@ def _save_campaign_history(
         "predicted_roi": top_recommendation.get("predicted_roi"),
         "input": campaign_input.model_dump(mode="json"),
         "output": recommendations,
+        "launched_platforms": [],
     }
     client.table(settings.SUPABASE_CAMPAIGN_TABLE).insert(row).execute()
 
@@ -63,14 +72,37 @@ def _get_user_campaign_history(user_id: str) -> List[Dict[str, Any]]:
     response = (
         client.table(settings.SUPABASE_CAMPAIGN_TABLE)
         .select(
-            "id,created_at,product_name,campaign_goal,budget_min,budget_max,top_platform,predicted_roi,output"
+            "id,created_at,product_name,campaign_goal,budget_min,budget_max,top_platform,predicted_roi,output,launched_platforms"
         )
         .eq("user_id", user_id)
         .order("created_at", desc=True)
         .limit(20)
         .execute()
     )
-    return response.data or []
+    rows = response.data or []
+    # Ensure launched_platforms is always a list even for older rows without the column
+    for row in rows:
+        if row.get("launched_platforms") is None:
+            row["launched_platforms"] = []
+    return rows
+
+
+def _persist_launched_platform(campaign_id: str, platform: str) -> None:
+    db = get_supabase_admin_client()
+    row_resp = (
+        db.table(settings.SUPABASE_CAMPAIGN_TABLE)
+        .select("launched_platforms")
+        .eq("id", campaign_id)
+        .single()
+        .execute()
+    )
+    current_platforms = row_resp.data.get("launched_platforms") or []
+    if platform not in current_platforms:
+        current_platforms.append(platform)
+    db.table(settings.SUPABASE_CAMPAIGN_TABLE).update(
+        {"launched_platforms": current_platforms}
+    ).eq("id", campaign_id).execute()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -78,25 +110,25 @@ async def lifespan(app: FastAPI):
     Lifespan context manager for startup and shutdown events
     """
     global data_analyzer, predictor, recommendation_engine
-    
+
     logger.info("="*60)
     logger.info(f"🚀 STARTING {settings.PROJECT_NAME}")
     logger.info("="*60)
-    
+
     try:
         # 1. Load and analyze data
         logger.info("\n📊 Step 1: Loading data...")
         data_analyzer = DataAnalyzer(settings.DATA_PATH)
-        
+
         # 2. Train prediction models
         logger.info("\n🤖 Step 2: Training ML models...")
         predictor = CampaignPredictor()
         metrics = predictor.train(data_analyzer.df)
-        
+
         # 3. Initialize recommendation engine
         logger.info("\n🎯 Step 3: Initializing recommendation engine...")
         recommendation_engine = RecommendationEngine(data_analyzer, predictor)
-        
+
         # 4. Log success
         logger.info("\n" + "="*60)
         logger.info("✅ PLANNING AGENT READY!")
@@ -105,15 +137,16 @@ async def lifespan(app: FastAPI):
         logger.info(f"📊 Conversion Model R²: {metrics['conversion']['r2']:.4f}")
         logger.info(f"📁 Data Records: {len(data_analyzer.df):,}")
         logger.info("="*60)
-        
+
     except Exception as e:
         logger.error(f"❌ Failed to initialize: {e}")
         logger.exception("Detailed error:")
         raise
-    
+
     yield
-    
+
     logger.info("🛑 Shutting down...")
+
 
 # Create FastAPI app
 app = FastAPI(
@@ -274,14 +307,6 @@ async def generate_recommendations(
     try:
         # Generate recommendations
         recommendations = recommendation_engine.generate_recommendations(campaign_input)
-        llm_result = summarize_ml_result(
-            recommendations,
-            product_name=campaign_input.product_name,
-            product_type=campaign_input.product_category or "",
-        )
-        recommendations["llm_summary"] = llm_result.get("llm_summary", "")
-        recommendations["keyword_suggestions"] = llm_result.get("keyword_suggestions", [])
-        recommendations["llm_model"] = settings.GROQ_MODEL if settings.GROQ_API_KEY else "fallback"
         
         logger.info(f"✅ Generated {len(recommendations['recommendations'])} recommendations")
         _save_campaign_history(current_user["id"], campaign_input, recommendations)
@@ -328,6 +353,138 @@ async def get_history(current_user: Dict[str, Any] = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Unable to fetch history")
 
     return [CampaignHistoryItem(**row) for row in rows]
+
+
+@app.post(f"{settings.API_V1_PREFIX}/google-ads/launch", tags=["Google Ads"])
+async def launch_google_ads_campaign(
+    payload: GoogleAdsLaunchRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Launch selected recommendation in Google Ads and block relaunches."""
+    try:
+        result = launch_selected_recommendation(
+            campaign_id=payload.campaign_id,
+            recommendation=payload.recommendation,
+            dry_run=payload.dry_run,
+            customer_id_override=payload.customer_id,
+            budget_resource_override=payload.budget_resource_name,
+            login_customer_id_override=payload.login_customer_id,
+        )
+        logger.info(
+            "Google Ads launch request processed for user=%s campaign_id=%s status=%s",
+            current_user.get("id"),
+            payload.campaign_id,
+            result.get("status"),
+        )
+
+        # If successfully launched (not a duplicate), persist the platform into the DB row
+        if result.get("status") == "launched" or result.get("status") == "launched_dry_run":
+            platform = payload.recommendation.get("platform", "Google Ads")
+            try:
+                _persist_launched_platform(payload.campaign_id, platform)
+                logger.info("Persisted launched platform '%s' for campaign_id=%s", platform, payload.campaign_id)
+            except Exception as db_err:
+                logger.warning("Could not persist launched platform to DB: %s", db_err)
+
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ModuleNotFoundError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Google Ads SDK is not installed in this environment: {e}",
+        )
+    except Exception as e:
+        logger.exception(f"Google Ads launch failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Launch failed: {str(e)}")
+
+
+@app.post(f"{settings.API_V1_PREFIX}/google-ads/launch-status", tags=["Google Ads"])
+async def get_google_ads_launch_status(
+    payload: GoogleAdsLaunchStatusRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Get launch status for a recommendation (to disable launch button in UI)."""
+    try:
+        status = get_recommendation_launch_status(
+            campaign_id=payload.campaign_id,
+            recommendation=payload.recommendation,
+        )
+        logger.info(
+            "Google Ads launch status checked for user=%s campaign_id=%s launchable=%s",
+            current_user.get("id"),
+            payload.campaign_id,
+            status.get("launchable"),
+        )
+        return status
+    except Exception as e:
+        logger.exception(f"Google Ads launch status lookup failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Status lookup failed: {str(e)}")
+
+
+@app.post(f"{settings.API_V1_PREFIX}/meta-ads/launch", tags=["Meta Ads"])
+async def launch_meta_ads_campaign(
+    payload: MetaAdsLaunchRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Launch selected recommendation in Meta Ads (Instagram/Facebook)."""
+    try:
+        result = launch_selected_meta_recommendation(
+            campaign_id=payload.campaign_id,
+            recommendation=payload.recommendation,
+            dry_run=payload.dry_run,
+            ad_account_id_override=payload.ad_account_id,
+        )
+        logger.info(
+            "Meta launch request processed for user=%s campaign_id=%s status=%s platform=%s",
+            current_user.get("id"),
+            payload.campaign_id,
+            result.get("status"),
+            payload.recommendation.get("platform"),
+        )
+
+        if result.get("status") == "launched" or result.get("status") == "launched_dry_run":
+            platform = payload.recommendation.get("platform", "Meta Ads")
+            try:
+                _persist_launched_platform(payload.campaign_id, platform)
+                logger.info("Persisted launched platform '%s' for campaign_id=%s", platform, payload.campaign_id)
+            except Exception as db_err:
+                logger.warning("Could not persist launched platform to DB: %s", db_err)
+
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ModuleNotFoundError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Meta SDK is not installed in this environment: {e}",
+        )
+    except Exception as e:
+        logger.exception(f"Meta launch failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Launch failed: {str(e)}")
+
+
+@app.post(f"{settings.API_V1_PREFIX}/meta-ads/launch-status", tags=["Meta Ads"])
+async def get_meta_ads_launch_status(
+    payload: MetaAdsLaunchStatusRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Get launchability status for a Meta recommendation."""
+    try:
+        status = get_meta_recommendation_launch_status(
+            campaign_id=payload.campaign_id,
+            recommendation=payload.recommendation,
+        )
+        logger.info(
+            "Meta launch status checked for user=%s campaign_id=%s launchable=%s",
+            current_user.get("id"),
+            payload.campaign_id,
+            status.get("launchable"),
+        )
+        return status
+    except Exception as e:
+        logger.exception(f"Meta launch status lookup failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Status lookup failed: {str(e)}")
 
 @app.get(f"{settings.API_V1_PREFIX}/insights", tags=["Insights"])
 async def get_insights():
@@ -403,3 +560,4 @@ if __name__ == "__main__":
         reload=settings.DEBUG,
         log_level="info"
     )
+

@@ -11,7 +11,7 @@ from ..models.schemas import ABTestPlan, CampaignInput, CampaignRecommendation, 
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_PLATFORMS = ["Instagram", "Google Ads", "LinkedIn Ads"]
+ALLOWED_PLATFORMS = ["Instagram", "Facebook", "Google Ads", "LinkedIn Ads"]
 
 
 class RecommendationEngine:
@@ -186,13 +186,20 @@ class RecommendationEngine:
         if not top_recs:
             return self._fallback_recommendations(user_input)
 
+        weighted_budget_allocations = self._calculate_weighted_roi_budget_allocations(
+            top_recs,
+            total_budget=float(user_input.budget_range.average),
+        )
+        budget_by_platform = {item["platform"]: item["recommended_budget"] for item in weighted_budget_allocations}
+
         recommendations = []
         for rec in top_recs:
             roi_std = self.df.groupby("Channel_Used")["ROI"].std().get(rec["platform"], 1.0)
             risk_level = self._calculate_risk_level(rec["predicted_roi"], roi_std, rec["confidence"])
             rationale = self._generate_rationale(rec, user_input)
+            weighted_budget = float(budget_by_platform.get(rec["platform"], rec["budget"]))
 
-            expected_impressions = self._estimate_impressions(rec["platform"], rec["budget"])
+            expected_impressions = self._estimate_impressions(rec["platform"], weighted_budget)
             expected_clicks = int(expected_impressions * (rec["predicted_conversion_rate"] * 10))
 
             recommendations.append(
@@ -204,7 +211,7 @@ class RecommendationEngine:
                     target_gender=user_input.target_audience.gender,
                     target_language=user_input.target_audience.language,
                     target_interests=user_input.target_audience.interests or [],
-                    budget=f"${rec['budget']:,.0f}",
+                    budget=f"{weighted_budget:,.0f}",
                     predicted_roi=round(rec["predicted_roi"], 2),
                     predicted_conversion_rate=round(rec["predicted_conversion_rate"] * 100, 2),
                     confidence=f"{rec['confidence']:.0%}",
@@ -219,7 +226,7 @@ class RecommendationEngine:
         ab_test_plan = self._generate_ab_test_plan(user_input, top_recs)
         insights = self._generate_insights(user_input, top_recs)
         data_quality = self._calculate_data_quality()
-        budget_suggestion = self._build_budget_suggestion(top_recs)
+        budget_suggestion = self._build_budget_suggestion(weighted_budget_allocations)
 
         top_pref = recommendations[0].model_dump() if recommendations else {}
         return {
@@ -236,16 +243,16 @@ class RecommendationEngine:
             "model_confidence": recommendations[0].confidence if recommendations else "0%",
         }
 
-    def _build_budget_suggestion(self, top_recs: List[Dict[str, Any]]) -> Dict[str, Any]:
-        budgets = [float(r["budget"]) for r in top_recs if r.get("budget") is not None]
-        if not budgets:
-            return {"recommended_min": 0, "recommended_max": 0, "platform_allocations": []}
+    def _calculate_weighted_roi_budget_allocations(
+        self, top_recs: List[Dict[str, Any]], total_budget: float
+    ) -> List[Dict[str, Any]]:
+        if not top_recs or total_budget <= 0:
+            return []
 
-        # ROI-weighted allocation:
-        # Budget_i = (ROI_i / sum(ROI)) * Total Budget
-        total_budget = float(sum(budgets))
         roi_values = [max(float(r.get("predicted_roi", 0.0)), 0.0) for r in top_recs]
         total_roi = sum(roi_values)
+        count = max(len(top_recs), 1)
+        equal_budget = total_budget / count
 
         allocations = []
         for rec, roi_i in zip(top_recs, roi_values):
@@ -253,8 +260,9 @@ class RecommendationEngine:
                 allocated_budget = (roi_i / total_roi) * total_budget
                 allocation_pct = (roi_i / total_roi) * 100
             else:
-                allocated_budget = total_budget / max(len(top_recs), 1)
-                allocation_pct = 100 / max(len(top_recs), 1)
+                allocated_budget = equal_budget
+                allocation_pct = 100 / count
+
             allocations.append(
                 {
                     "platform": rec["platform"],
@@ -264,12 +272,18 @@ class RecommendationEngine:
                 }
             )
 
+        return allocations
+
+    def _build_budget_suggestion(self, allocations: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not allocations:
+            return {"recommended_min": 0, "recommended_max": 0, "platform_allocations": []}
+
         allocated_values = [item["recommended_budget"] for item in allocations]
         return {
             "recommended_min": round(min(allocated_values), 2),
             "recommended_max": round(max(allocated_values), 2),
             "recommended_average": round(sum(allocated_values) / len(allocated_values), 2),
-            "total_budget": round(total_budget, 2),
+            "total_budget": round(sum(allocated_values), 2),
             "platform_allocations": allocations,
         }
 
@@ -316,6 +330,7 @@ class RecommendationEngine:
         cpm_estimates = {
             "Google Ads": 30,
             "Instagram": 35,
+            "Facebook": 28,
             "LinkedIn Ads": 80,
         }
         cpm = cpm_estimates.get(channel, 35)
@@ -429,12 +444,18 @@ class RecommendationEngine:
             "ab_testing_plan": ABTestPlan(
                 recommended=True,
                 channels_to_test=ALLOWED_PLATFORMS,
-                budget_per_channel=f"${budget/3:,.0f}",
+                budget_per_channel=f"${budget/max(len(ALLOWED_PLATFORMS), 1):,.0f}",
                 test_duration_days=14,
                 success_metric="ROI > 5.0",
                 minimum_detectable_effect=0.2,
             ).model_dump(),
             "insights": ["Using rule-based recommendations due to limited data"],
+            "budget_suggestion": self._build_budget_suggestion(
+                self._calculate_weighted_roi_budget_allocations(
+                    [{"platform": r.platform, "predicted_roi": r.predicted_roi} for r in recommendations],
+                    total_budget=float(budget),
+                )
+            ),
             "data_quality_score": 0.3,
             "model_confidence": "50%",
         }

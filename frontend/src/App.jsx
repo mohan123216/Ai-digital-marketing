@@ -47,6 +47,7 @@ export default function App() {
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [planError, setPlanError] = useState("");
   const [launchModal, setLaunchModal] = useState({ open: false, platform: null, status: 'idle' });
+  const [launchedKeys, setLaunchedKeys] = useState(new Set());
 
   useEffect(() => {
     const loadCatalog = async () => {
@@ -73,6 +74,7 @@ export default function App() {
     if (!accessToken) {
       setUser(null);
       setHistory([]);
+      setLaunchedKeys(new Set());
       return;
     }
 
@@ -81,6 +83,14 @@ export default function App() {
         const [profile, rows] = await Promise.all([api.getMe(accessToken), api.getHistory(accessToken)]);
         setUser(profile);
         setHistory(rows);
+        // Rebuild launched keys from DB records on every login/refresh
+        const keys = new Set();
+        rows.forEach(item => {
+          (item.launched_platforms || []).forEach(platform => {
+            keys.add(`${item.id}::${platform}`);
+          });
+        });
+        setLaunchedKeys(keys);
       } catch (_error) {
         localStorage.removeItem(TOKEN_KEY);
         setAccessToken("");
@@ -144,7 +154,15 @@ export default function App() {
       customer_segment: previousInput.target_audience?.customer_segment || initialCampaign.customer_segment,
       duration_days: previousInput.duration_days || initialCampaign.duration_days,
     });
-    setResult(item.output);
+    setResult({ ...item.output, id: item.id });
+    // Restore the launched state for this specific history item
+    const platformsLaunched = item.launched_platforms || [];
+    // Keep all existing keys but ensure this item's platforms are represented
+    setLaunchedKeys(prev => {
+      const next = new Set(prev);
+      platformsLaunched.forEach(platform => next.add(`${item.id}::${platform}`));
+      return next;
+    });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -180,9 +198,27 @@ export default function App() {
 
     try {
       const recommendation = await api.createRecommendation(accessToken, payload);
-      setResult(recommendation);
       const rows = await api.getHistory(accessToken);
       setHistory(rows);
+
+      // Rebuild launchedKeys from fresh DB history
+      const keys = new Set();
+      rows.forEach(item => {
+        (item.launched_platforms || []).forEach(platform => {
+          keys.add(`${item.id}::${platform}`);
+        });
+      });
+      setLaunchedKeys(keys);
+
+      // Find the ID of the newly created campaign run mapping from history
+      // Note: `api.createRecommendation` doesn't currently return the database ID directly. 
+      // Assuming latest history row belongs to this request.
+      if (rows && rows.length > 0) {
+        setResult({ ...recommendation, id: rows[0].id });
+      } else {
+        setResult(recommendation);
+      }
+
     } catch (error) {
       setPlanError(error.message || "Could not generate campaign recommendation.");
     } finally {
@@ -190,19 +226,80 @@ export default function App() {
     }
   };
 
-  const handleLaunch = (platform) => {
-    setLaunchModal({ open: true, platform: platform, status: 'launching' });
+  const handleLaunch = async (rec) => {
+    const platform = rec.platform;
+    setLaunchModal({ open: true, platform: platform, status: 'launching', message: `Deploying assets to ${platform}...` });
+    const campaignId = result?.id || "unknown_campaign_id";
+    const recommendationPayload = {
+      ...rec,
+      duration_days: Number(campaign.duration_days || 30),
+      campaign_goal: campaign.campaign_goal,
+      product_name: campaign.product_name,
+      product_category: campaign.product_category || null,
+    };
 
-    // Simulate API delay for launching
-    setTimeout(() => {
-      setLaunchModal({ open: true, platform: platform, status: 'success' });
+    if (platform === "Google Ads") {
+      try {
+        const response = await api.launchGoogleAds(accessToken, {
+          campaign_id: campaignId,
+          recommendation: recommendationPayload,
+          dry_run: false
+        });
 
-      // Auto close after success
+        if (response.status === "already_launched") {
+          setLaunchModal({ open: true, platform: platform, status: 'error', message: response.message });
+        } else {
+          setLaunchModal({ open: true, platform: platform, status: 'success', message: response.message });
+          // Mark this recommendation as launched so the button disappears
+          const launchKey = `${result.id}::${platform}`;
+          setLaunchedKeys(prev => new Set([...prev, launchKey]));
+        }
+
+      } catch (error) {
+        console.error("Launch error:", error);
+        setLaunchModal({ open: true, platform: platform, status: 'error', message: error.message || "Failed to launch on Google Ads." });
+      }
+
       setTimeout(() => {
-        setLaunchModal({ open: false, platform: null, status: 'idle' });
-      }, 2500);
+        setLaunchModal(prev => ({ ...prev, open: false }));
+      }, 3500);
 
-    }, 2000);
+    } else if (platform === "Instagram" || platform === "Facebook") {
+      try {
+        const response = await api.launchMetaAds(accessToken, {
+          campaign_id: campaignId,
+          recommendation: recommendationPayload,
+          dry_run: false,
+        });
+
+        if (response.status === "already_launched") {
+          setLaunchModal({ open: true, platform: platform, status: 'error', message: response.message });
+        } else {
+          setLaunchModal({ open: true, platform: platform, status: 'success', message: response.message });
+          const launchKey = `${result?.id}::${platform}`;
+          setLaunchedKeys(prev => new Set([...prev, launchKey]));
+        }
+      } catch (error) {
+        console.error("Meta launch error:", error);
+        setLaunchModal({ open: true, platform: platform, status: 'error', message: error.message || `Failed to launch on ${platform}.` });
+      }
+
+      setTimeout(() => {
+        setLaunchModal(prev => ({ ...prev, open: false }));
+      }, 3500);
+
+    } else {
+      // Fallback simulation for platforms without an integrated launcher yet.
+      setTimeout(() => {
+        setLaunchModal({ open: true, platform: platform, status: 'success', message: `Campaign is now live on ${platform}. (Simulated)` });
+        // Mark as launched for simulated platforms too
+        const launchKey = `${result?.id}::${platform}`;
+        setLaunchedKeys(prev => new Set([...prev, launchKey]));
+        setTimeout(() => {
+          setLaunchModal({ open: false, platform: null, status: 'idle', message: '' });
+        }, 2500);
+      }, 2000);
+    }
   };
 
   if (!accessToken) {
@@ -303,16 +400,18 @@ export default function App() {
       {launchModal.open && (
         <div className="modal-overlay">
           <div className="modal-content">
-            {launchModal.status === 'launching' ? (
+            {launchModal.status === 'launching' && (
               <>
                 <div className="spinner-wrapper">
                   <div className="spinner"></div>
                   <div className="spinner-inner"></div>
                 </div>
                 <h3>Initializing Deployment</h3>
-                <p>Deploying assets to {launchModal.platform}...</p>
+                <p>{launchModal.message}</p>
               </>
-            ) : (
+            )}
+
+            {launchModal.status === 'success' && (
               <>
                 <div className="spinner-wrapper" style={{ display: 'grid', placeItems: 'center' }}>
                   <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -321,7 +420,21 @@ export default function App() {
                   </svg>
                 </div>
                 <h3 style={{ color: '#10b981' }}>Deployed Successfully</h3>
-                <p>Campaign is now live on {launchModal.platform}.</p>
+                <p>{launchModal.message}</p>
+              </>
+            )}
+
+            {launchModal.status === 'error' && (
+              <>
+                <div className="spinner-wrapper" style={{ display: 'grid', placeItems: 'center' }}>
+                  <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="15" y1="9" x2="9" y2="15"></line>
+                    <line x1="9" y1="9" x2="15" y2="15"></line>
+                  </svg>
+                </div>
+                <h3 style={{ color: '#ef4444' }}>Deployment Failed</h3>
+                <p>{launchModal.message}</p>
               </>
             )}
           </div>
@@ -449,35 +562,33 @@ export default function App() {
                       <span>Conv. Probability</span>
                       <strong>{rec.predicted_conversion_rate}%</strong>
                     </p>
-                    <button
-                      className="btn-launch"
-                      onClick={() => handleLaunch(rec.platform)}
-                    >
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="22" y1="2" x2="11" y2="13"></line>
-                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                      </svg>
-                      Launch Network
-                    </button>
+                    {(() => {
+                      const launchKey = `${result?.id}::${rec.platform}`;
+                      const isLaunched = launchedKeys.has(launchKey);
+                      return isLaunched ? (
+                        <div className="launched-badge">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                            <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                          </svg>
+                          Launched
+                        </div>
+                      ) : (
+                        <button
+                          className="btn-launch"
+                          onClick={() => handleLaunch(rec)}
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                          </svg>
+                          Launch Network
+                        </button>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
-              {result.llm_summary && (
-                <div className="llm-block">
-                  <h3>Intelligence Summary ({result.llm_model || "model"})</h3>
-                  <p>{result.llm_summary}</p>
-                </div>
-              )}
-              {result.keyword_suggestions?.length > 0 && (
-                <div className="llm-block">
-                  <h3>Top-Tier Search Queries</h3>
-                  <ul>
-                    {result.keyword_suggestions.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
               {result.budget_suggestion && (
                 <div className="llm-block">
                   <h3>Calculated Expenditure</h3>
