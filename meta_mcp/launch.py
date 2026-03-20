@@ -13,6 +13,20 @@ load_dotenv()
 
 STATE_FILE = Path(__file__).resolve().parent / "launched_campaigns.json"
 SUPPORTED_CHANNELS = {"Instagram", "Facebook"}
+MCP_STATE_TABLE = "mcp_campaign_state"
+
+
+def _get_supabase_client():
+    """Return a Supabase admin client, or None if not configured."""
+    try:
+        import sys
+        _root = str(Path(__file__).resolve().parent.parent)
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+        from app.services.supabase_client import get_supabase_admin_client
+        return get_supabase_admin_client()
+    except Exception:
+        return None
 
 
 COUNTRY_CODE_MAP = {
@@ -69,6 +83,34 @@ GOAL_CONFIG_MAP = {
 
 
 def _load_state() -> Dict[str, Any]:
+    """Load state from Supabase, falling back to JSON file."""
+    try:
+        db = _get_supabase_client()
+        if db:
+            rows = db.table(MCP_STATE_TABLE).select("*").eq("platform", "Instagram").execute().data or []
+            rows += db.table(MCP_STATE_TABLE).select("*").eq("platform", "Facebook").execute().data or []
+            launched = {}
+            for row in rows:
+                key = row.get("recommendation_key")
+                if key:
+                    # Back-compat: older rows may only have resource_name populated.
+                    meta_campaign_id = row.get("meta_campaign_id") or row.get("resource_name")
+                    launched[key] = {
+                        "campaign_id": row.get("campaign_id"),
+                        "platform": row.get("platform"),
+                        "resource_name": row.get("resource_name"),
+                        "meta_campaign_id": meta_campaign_id,
+                        "meta_adset_id": row.get("meta_adset_id"),
+                        "launched_at": row.get("launched_at"),
+                        "recommendation": row.get("recommendation") or {},
+                        "launchable": row.get("launchable", False),
+                        "status": row.get("status", "launched"),
+                    }
+            return {"launched": launched}
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Supabase state load failed, using JSON: {e}")
+
     if not STATE_FILE.exists():
         return {"launched": {}}
     try:
@@ -82,8 +124,33 @@ def _load_state() -> Dict[str, Any]:
 
 
 def _save_state(state: Dict[str, Any]) -> None:
-    with STATE_FILE.open("w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
+    """Persist state to Supabase and JSON file."""
+    try:
+        db = _get_supabase_client()
+        if db:
+            for key, entry in state.get("launched", {}).items():
+                row = {
+                    "recommendation_key": key,
+                    "campaign_id": entry.get("campaign_id"),
+                    "platform": entry.get("platform", "Meta"),
+                    "ad_type": "meta",
+                    "resource_name": entry.get("meta_campaign_id") or entry.get("resource_name"),
+                    "meta_campaign_id": entry.get("meta_campaign_id") or entry.get("resource_name"),
+                    "meta_adset_id": entry.get("meta_adset_id"),
+                    "launched_at": entry.get("launched_at"),
+                    "recommendation": entry.get("recommendation") or {},
+                    "launchable": entry.get("launchable", False),
+                    "status": entry.get("status", "launched"),
+                }
+                db.table(MCP_STATE_TABLE).upsert(row, on_conflict="recommendation_key").execute()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Supabase state save failed, using JSON: {e}")
+    try:
+        with STATE_FILE.open("w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except Exception:
+        pass
 
 
 def _recommendation_key(campaign_id: str, recommendation: Dict[str, Any]) -> str:

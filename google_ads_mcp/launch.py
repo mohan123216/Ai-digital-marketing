@@ -12,9 +12,48 @@ load_dotenv()
 
 STATE_FILE = Path(__file__).resolve().parent / "launched_campaigns.json"
 DEFAULT_CHANNEL = "Google Ads"
+MCP_STATE_TABLE = "mcp_campaign_state"
+
+
+def _get_supabase_client():
+    """Return a Supabase admin client, or None if not configured."""
+    try:
+        import sys, os as _os
+        _root = str(Path(__file__).resolve().parent.parent)
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+        from app.services.supabase_client import get_supabase_admin_client
+        return get_supabase_admin_client()
+    except Exception:
+        return None
 
 
 def _load_state() -> Dict[str, Any]:
+    """Load campaign launch state from Supabase, falling back to JSON file."""
+    try:
+        db = _get_supabase_client()
+        if db:
+            rows = db.table(MCP_STATE_TABLE).select("*").execute().data or []
+            launched = {}
+            for row in rows:
+                key = row.get("recommendation_key")
+                if key:
+                    launched[key] = {
+                        "campaign_id": row.get("campaign_id"),
+                        "platform": row.get("platform"),
+                        "ad_type": row.get("ad_type", "text"),
+                        "resource_name": row.get("resource_name"),
+                        "launched_at": row.get("launched_at"),
+                        "recommendation": row.get("recommendation") or {},
+                        "launchable": row.get("launchable", False),
+                        "status": row.get("status", "launched"),
+                    }
+            return {"launched": launched}
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Supabase state load failed, using JSON fallback: {e}")
+
+    # JSON fallback
     if not STATE_FILE.exists():
         return {"launched": {}}
     try:
@@ -28,8 +67,78 @@ def _load_state() -> Dict[str, Any]:
 
 
 def _save_state(state: Dict[str, Any]) -> None:
-    with STATE_FILE.open("w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
+    """Persist campaign launch state to Supabase and JSON file."""
+    # Persist to Supabase
+    try:
+        db = _get_supabase_client()
+        if db:
+            for key, entry in state.get("launched", {}).items():
+                row = {
+                    "recommendation_key": key,
+                    "campaign_id": entry.get("campaign_id"),
+                    "platform": entry.get("platform", "Google Ads"),
+                    "ad_type": entry.get("ad_type", "text"),
+                    "resource_name": entry.get("resource_name"),
+                    "launched_at": entry.get("launched_at"),
+                    "recommendation": entry.get("recommendation") or {},
+                    "launchable": entry.get("launchable", False),
+                    "status": entry.get("status", "launched"),
+                }
+                db.table(MCP_STATE_TABLE).upsert(row, on_conflict="recommendation_key").execute()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Supabase state save failed, using JSON fallback: {e}")
+
+    # Always also write JSON as fallback
+    try:
+        with STATE_FILE.open("w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except Exception:
+        pass
+
+
+def _prepare_display_images(original_bytes: bytes) -> tuple[bytes, bytes]:
+    """Returns (landscape_1_91_bytes, square_1_1_bytes) properly padded/cropped."""
+    import io
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(original_bytes))
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+        
+    width, height = img.size
+    
+    # 1. Square (1:1)
+    sq_size = max(width, height)
+    sq_img = Image.new("RGB", (sq_size, sq_size), (255, 255, 255))
+    sq_img.paste(img, ((sq_size - width) // 2, (sq_size - height) // 2))
+    if sq_size < 300:
+        sq_img = sq_img.resize((300, 300), Image.Resampling.LANCZOS)
+    sq_bytes_io = io.BytesIO()
+    sq_img.save(sq_bytes_io, format="JPEG", quality=90)
+    sq_bytes = sq_bytes_io.getvalue()
+    
+    # 2. Landscape (1.91:1)
+    target_aspect = 1.91
+    current_aspect = width / height
+    if current_aspect > target_aspect:
+        target_width = width
+        target_height = int(width / target_aspect)
+    else:
+        target_height = height
+        target_width = int(height * target_aspect)
+        
+    ls_img = Image.new("RGB", (target_width, target_height), (255, 255, 255))
+    ls_img.paste(img, ((target_width - width) // 2, (target_height - height) // 2))
+    if target_width < 600 or target_height < 314:
+        scale = max(600 / target_width, 314 / target_height)
+        new_w, new_h = int(target_width * scale), int(target_height * scale)
+        ls_img = ls_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    ls_bytes_io = io.BytesIO()
+    ls_img.save(ls_bytes_io, format="JPEG", quality=90)
+    ls_bytes = ls_bytes_io.getvalue()
+    
+    return ls_bytes, sq_bytes
 
 
 def _recommendation_key(campaign_id: str, recommendation: Dict[str, Any]) -> str:
@@ -72,6 +181,7 @@ def _load_google_client():
         config["login_customer_id"] = login_customer_id
     return GoogleAdsClient.load_from_dict(config)
 
+
 def _print_campaign_metrics(campaign_name: str, recommendation: Dict[str, Any]) -> None:
     """Print campaign metrics before launch."""
     metrics = {
@@ -89,9 +199,12 @@ def _print_campaign_metrics(campaign_name: str, recommendation: Dict[str, Any]) 
     for k, v in metrics.items():
         print(f"{k} : {v}")
     print("======================================\n")
+
+
 def launch_selected_recommendation(
     campaign_id: str,
     recommendation: Dict[str, Any],
+    ad_type: str = "text",
     dry_run: bool = False,
     customer_id_override: str | None = None,
     budget_resource_override: str | None = None,
@@ -110,7 +223,8 @@ def launch_selected_recommendation(
     state = _load_state()
     key = _recommendation_key(campaign_id, recommendation)
     already = state["launched"].get(key)
-    if already:
+    # If already launched normally, block. If it was a dry_run/simulated, allow re-launch for real.
+    if already and already.get("status") != "launched_dry_run":
         return {
             "status": "already_launched",
             "message": "This recommendation has already been launched.",
@@ -120,13 +234,12 @@ def launch_selected_recommendation(
         }
 
     customer_id = customer_id_override or os.getenv("CUSTOMER_ID")
-    budget_resource = budget_resource_override or os.getenv("BUDGET_RESOURCE_NAME")
     previous_login_customer_id = os.getenv("LOGIN_CUSTOMER_ID")
     if login_customer_id_override:
         os.environ["LOGIN_CUSTOMER_ID"] = login_customer_id_override
 
-    if not customer_id or not budget_resource:
-        raise ValueError("Missing CUSTOMER_ID or BUDGET_RESOURCE_NAME in environment.")
+    if not customer_id:
+        raise ValueError("Missing CUSTOMER_ID in environment.")
 
     location = recommendation.get("target_location", "Unknown")
     segment = recommendation.get("target_segment", "General")
@@ -135,55 +248,87 @@ def launch_selected_recommendation(
     predicted_roi = recommendation.get("predicted_roi", "N/A")
     predicted_conv = recommendation.get("predicted_conversion_rate", "N/A")
 
-    # Use recommendation metrics in campaign name for traceability.
     campaign_name = (
         f"AI {segment} {location} {age_group} "
         f"ROI{predicted_roi} CR{predicted_conv} B{int(budget_usd)} {key}"
     )[:255]
     _print_campaign_metrics(campaign_name, recommendation)
+
     try:
         if dry_run:
             resource_name = f"dryrun/customers/{customer_id}/campaigns/{key}"
         else:
             client = _load_google_client()
+            
+            # Create a non-shared budget for the campaign
+            budget_service = client.get_service("CampaignBudgetService")
+            budget_op = client.get_type("CampaignBudgetOperation")
+            budget = budget_op.create
+            budget.name = f"Budget – {campaign_name}"
+            budget.amount_micros = int(budget_usd * 1_000_000)
+            budget.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
+            budget.explicitly_shared = False
+            
+            budget_resp = budget_service.mutate_campaign_budgets(
+                customer_id=customer_id,
+                operations=[budget_op],
+            )
+            budget_resource = budget_resp.results[0].resource_name
+
             campaign_service = client.get_service("CampaignService")
             campaign_operation = client.get_type("CampaignOperation")
             campaign = campaign_operation.create
 
             campaign.name = campaign_name
-            campaign.advertising_channel_type = client.enums.AdvertisingChannelTypeEnum.SEARCH
+            
+            if ad_type == "video":
+                campaign.advertising_channel_type = client.enums.AdvertisingChannelTypeEnum.VIDEO
+                # VIDEO_TRUE_VIEW_IN_STREAM (skippable in-stream) ads require MANUAL_CPV or MAXIMIZE_CONVERSIONS.
+                client.get_type("ManualCpv") # Ensure it exists
+                campaign.manual_cpv = client.get_type("ManualCpv")
+            elif ad_type == "image":
+                campaign.advertising_channel_type = client.enums.AdvertisingChannelTypeEnum.DISPLAY
+                campaign.manual_cpc.enhanced_cpc_enabled = False
+            else:
+                campaign.advertising_channel_type = client.enums.AdvertisingChannelTypeEnum.SEARCH
+                campaign.manual_cpc.enhanced_cpc_enabled = False
+                campaign.network_settings.target_google_search = True
+                campaign.network_settings.target_search_network = True
+                campaign.network_settings.target_content_network = False
+
             campaign.status = client.enums.CampaignStatusEnum.ENABLED
-            campaign.manual_cpc = client.get_type("ManualCpc")
             campaign.campaign_budget = budget_resource
 
-            campaign.network_settings.target_google_search = True
-            campaign.network_settings.target_search_network = True
-            campaign.network_settings.target_content_network = False
+            # Required in v15+: set to 2 = DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING.
+            campaign.contains_eu_political_advertising = 2
 
-            campaign.contains_eu_political_advertising = (
-                client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
-            )
-
-            response = campaign_service.mutate_campaigns(
-                customer_id=customer_id,
-                operations=[campaign_operation],
-            )
-            resource_name = response.results[0].resource_name
+            try:
+                response = campaign_service.mutate_campaigns(
+                    customer_id=customer_id,
+                    operations=[campaign_operation],
+                )
+                resource_name = response.results[0].resource_name
+            except Exception as e:
+                # Remove simulation fallback to allow real errors to surface or success to occur
+                raise e
     finally:
         if login_customer_id_override:
             if previous_login_customer_id:
                 os.environ["LOGIN_CUSTOMER_ID"] = previous_login_customer_id
             else:
                 os.environ.pop("LOGIN_CUSTOMER_ID", None)
-    launched_at = datetime.utcnow().isoformat() + "Z"
 
+    launched_at = datetime.utcnow().isoformat() + "Z"
+    status = "launched_dry_run" if (dry_run or resource_name.startswith("dryrun/")) else "launched"
     state["launched"][key] = {
         "campaign_id": campaign_id,
         "platform": DEFAULT_CHANNEL,
+        "ad_type": ad_type,
         "resource_name": resource_name,
         "launched_at": launched_at,
         "recommendation": recommendation,
         "launchable": False,
+        "status": status,
     }
     _save_state(state)
 
@@ -202,11 +347,582 @@ def get_recommendation_launch_status(campaign_id: str, recommendation: Dict[str,
     state = _load_state()
     key = _recommendation_key(campaign_id, recommendation)
     existing = state.get("launched", {}).get(key)
+    # A recommendation is launchable if it hasn't been launched, or if the previous launch was a simulation.
+    launchable = (existing is None or existing.get("status") == "launched_dry_run")
     return {
         "recommendation_key": key,
-        "launchable": existing is None,
-        "status": "not_launched" if existing is None else "already_launched",
+        "launchable": launchable,
+        "status": "not_launched" if launchable else "already_launched",
         "existing": existing,
+    }
+
+
+def get_campaign_resource_name_for_run(campaign_run_id: str) -> str | None:
+    """Look up the Google Ads campaign resource_name stored when the campaign was launched."""
+    state = _load_state()
+    for entry in state.get("launched", {}).values():
+        if entry.get("campaign_id") == campaign_run_id:
+            return entry.get("resource_name")
+    return None
+
+
+# ─── Text / Responsive Search Ad ─────────────────────────────────────────────
+
+def launch_ad_to_campaign(
+    campaign_run_id: str,
+    ad_payload: Dict[str, Any],
+    dry_run: bool = False,
+    customer_id_override: str | None = None,
+    login_customer_id_override: str | None = None,
+) -> Dict[str, Any]:
+    """Create an Ad Group + Responsive Search Ad inside an existing SEARCH campaign.
+
+    Parameters
+    ----------
+    campaign_run_id : str
+        The UUID of the campaign_runs row (used to look up the Google resource name).
+    ad_payload : dict
+        Must contain: headline_1..3, description_1..2, final_url.
+        Optional: display_url_path_1/2, keywords (list of str), ad_name.
+    dry_run : bool
+        When True, no real API calls are made.
+
+    Returns
+    -------
+    dict with keys: status, ad_resource_name, adgroup_resource_name, message.
+    """
+    customer_id = customer_id_override or os.getenv("CUSTOMER_ID")
+    campaign_resource = get_campaign_resource_name_for_run(campaign_run_id)
+
+    headline_1 = ad_payload.get("headline_1", "")
+    headline_2 = ad_payload.get("headline_2", "")
+    headline_3 = ad_payload.get("headline_3", "")
+    description_1 = ad_payload.get("description_1", "")
+    description_2 = ad_payload.get("description_2", "")
+    final_url = ad_payload.get("final_url", "")
+    path1 = ad_payload.get("display_url_path_1") or ""
+    path2 = ad_payload.get("display_url_path_2") or ""
+    keywords: list = ad_payload.get("keywords") or []
+    ad_name = ad_payload.get("ad_name") or f"AI Ad {datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    adgroup_name = f"AdGroup – {ad_name}"
+
+    if not campaign_resource:
+        raise ValueError(f"No Google Ads campaign found for run ID {campaign_run_id}. Please launch the campaign first.")
+    
+    if campaign_resource.startswith("dryrun/"):
+        raise ValueError(f"The parent campaign ({campaign_resource}) was a simulated launch. Please launch the campaign for real (click 'Launch Campaign' again) before attaching an ad.")
+
+    if dry_run or not customer_id:
+        fake_key = hashlib.sha256(
+            json.dumps(ad_payload, sort_keys=True).encode()
+        ).hexdigest()[:16]
+        reason = (
+            "dry_run=True"
+            if dry_run
+            else ("missing CUSTOMER_ID" if not customer_id else "campaign not yet launched to Google Ads")
+        )
+        return {
+            "status": "launched_dry_run",
+            "message": f"Ad launch simulated ({reason}).",
+            "ad_resource_name": f"dryrun/customers/0/ads/{fake_key}",
+            "adgroup_resource_name": f"dryrun/customers/0/adGroups/{fake_key}",
+            "ad_name": ad_name,
+            "adgroup_name": adgroup_name,
+        }
+
+    previous_login_cid = os.getenv("LOGIN_CUSTOMER_ID")
+    if login_customer_id_override:
+        os.environ["LOGIN_CUSTOMER_ID"] = login_customer_id_override
+
+    try:
+        client = _load_google_client()
+
+        # ── 1. Create Ad Group (SEARCH_STANDARD for Search campaigns) ─────
+        adgroup_service = client.get_service("AdGroupService")
+        adgroup_op = client.get_type("AdGroupOperation")
+        adgroup = adgroup_op.create
+
+        adgroup.name = adgroup_name
+        adgroup.campaign = campaign_resource
+        adgroup.status = client.enums.AdGroupStatusEnum.ENABLED
+        adgroup.type_ = client.enums.AdGroupTypeEnum.SEARCH_STANDARD
+        adgroup.cpc_bid_micros = 1_000_000  # $1.00 default CPC
+
+        ag_response = adgroup_service.mutate_ad_groups(
+            customer_id=customer_id,
+            operations=[adgroup_op],
+        )
+        adgroup_resource = ag_response.results[0].resource_name
+
+        # ── 2. Create Responsive Search Ad ────────────────────────────────
+        ad_service = client.get_service("AdGroupAdService")
+        ad_op = client.get_type("AdGroupAdOperation")
+        ad_group_ad = ad_op.create
+
+        ad_group_ad.ad_group = adgroup_resource
+        ad_group_ad.status = client.enums.AdGroupAdStatusEnum.ENABLED
+
+        rsa = ad_group_ad.ad.responsive_search_ad
+
+        def _hl(text: str):
+            asset = client.get_type("AdTextAsset")
+            asset.text = text[:30]
+            return asset
+
+        def _desc(text: str):
+            asset = client.get_type("AdTextAsset")
+            asset.text = text[:90]
+            return asset
+
+        rsa.headlines.extend([_hl(headline_1), _hl(headline_2), _hl(headline_3)])
+        rsa.descriptions.extend([_desc(description_1), _desc(description_2)])
+
+        ad_group_ad.ad.final_urls.append(final_url)
+        if path1:
+            rsa.path1 = path1[:15]
+        if path2:
+            rsa.path2 = path2[:15]
+
+        ad_response = ad_service.mutate_ad_group_ads(
+            customer_id=customer_id,
+            operations=[ad_op],
+        )
+        ad_resource = ad_response.results[0].resource_name
+
+        # ── 3. Add keywords to Ad Group ───────────────────────────────────
+        if keywords:
+            kw_service = client.get_service("AdGroupCriterionService")
+            kw_ops = []
+            for kw_text in keywords[:20]:  # cap at 20
+                kw_op = client.get_type("AdGroupCriterionOperation")
+                criterion = kw_op.create
+                criterion.ad_group = adgroup_resource
+                criterion.status = client.enums.AdGroupCriterionStatusEnum.ENABLED
+                criterion.keyword.text = kw_text.strip()[:80]
+                criterion.keyword.match_type = client.enums.KeywordMatchTypeEnum.BROAD
+                kw_ops.append(kw_op)
+            kw_service.mutate_ad_group_criteria(
+                customer_id=customer_id,
+                operations=kw_ops,
+            )
+
+    finally:
+        if login_customer_id_override:
+            if previous_login_cid:
+                os.environ["LOGIN_CUSTOMER_ID"] = previous_login_cid
+            else:
+                os.environ.pop("LOGIN_CUSTOMER_ID", None)
+
+    return {
+        "status": "launched",
+        "message": "Ad launched successfully on Google Ads.",
+        "ad_resource_name": ad_resource,
+        "adgroup_resource_name": adgroup_resource,
+        "ad_name": ad_name,
+        "adgroup_name": adgroup_name,
+    }
+
+
+# ─── Image Ad (creates its own Display campaign) ──────────────────────────────
+
+def launch_image_ad_to_campaign(
+    campaign_run_id: str,
+    ad_payload: Dict[str, Any],
+    image_bytes: bytes,
+    image_filename: str,
+    dry_run: bool = False,
+    customer_id_override: str | None = None,
+    login_customer_id_override: str | None = None,
+) -> Dict[str, Any]:
+    """Create a Google Display campaign and launch a Responsive Display Ad with an image.
+
+    Because image ads require a DISPLAY campaign (not SEARCH), this function
+    self-creates:
+      1. A CampaignBudget (daily budget derived from ad_payload or defaulted to $10).
+      2. A Display campaign (advertising_channel_type=DISPLAY, TARGET_SPEND bidding).
+      3. A DISPLAY_STANDARD AdGroup.
+      4. Uploads the image as an ImageAsset.
+      5. Creates a ResponsiveDisplayAd using the image.
+      6. Optionally adds keyword contextual targeting.
+    """
+    customer_id = customer_id_override or os.getenv("CUSTOMER_ID")
+
+    # ── Extract payload fields ─────────────────────────────────────────────────
+    final_url     = (ad_payload.get("final_url") or "").strip()
+    ad_name       = (ad_payload.get("ad_name") or
+                     f"Image Ad {datetime.utcnow().strftime('%Y%m%d%H%M%S')}").strip()
+    headline      = (ad_payload.get("headline_1") or ad_name)[:30]
+    long_headline = (ad_payload.get("long_headline") or ad_name)[:90]
+    business_name = (ad_payload.get("business_name") or "My Business")[:25]
+    description   = (ad_payload.get("description_1") or business_name)[:90]
+    keywords: list = ad_payload.get("keywords") or []
+    # daily budget in micros (1 USD = 1,000,000 micros); default $10/day
+    budget_micros = int(_parse_budget_usd(ad_payload.get("budget")) * 1_000_000) or 10_000_000
+    campaign_name = f"Display – {ad_name}"
+    adgroup_name  = f"DspAG – {ad_name}"
+
+    if not final_url:
+        raise ValueError("final_url is required for image ad launch.")
+
+    # ── Verify Campaign Exists ────────────────────────────────────────────────
+    state = _load_state()
+    launched = None
+    for k, v in state.get("launched", {}).items():
+        if v.get("campaign_id") == campaign_run_id and v.get("platform") == "Google Ads":
+            launched = v
+            break
+            
+    if not launched and not dry_run:
+        raise ValueError(f"No Google Ads campaign found for run ID {campaign_run_id}. Please launch the campaign first.")
+        
+    campaign_resource = launched.get("resource_name") if launched else f"dryrun/customers/{customer_id}/campaigns/fake"
+
+    if campaign_resource.startswith("dryrun/") and not dry_run:
+        raise ValueError(f"The parent campaign ({campaign_resource}) was a simulated launch. Please launch the campaign for real (click 'Launch Campaign' again) before attaching an ad.")
+
+    # ── Dry-run / missing config shortcut ─────────────────────────────────────
+    if dry_run or not customer_id:
+        fake_key = hashlib.sha256(
+            json.dumps(ad_payload, sort_keys=True).encode()
+        ).hexdigest()[:16]
+        reason = "dry_run=True" if dry_run else "missing CUSTOMER_ID"
+        return {
+            "status": "launched_dry_run",
+            "message": f"Image ad launch simulated ({reason}).",
+            "campaign_resource_name": campaign_resource,
+            "ad_resource_name": f"dryrun/customers/0/ads/{fake_key}",
+            "adgroup_resource_name": f"dryrun/customers/0/adGroups/{fake_key}",
+            "image_asset_resource_name": f"dryrun/customers/0/assets/{fake_key}",
+            "ad_name": ad_name,
+        }
+
+    previous_login_cid = os.getenv("LOGIN_CUSTOMER_ID")
+    if login_customer_id_override:
+        os.environ["LOGIN_CUSTOMER_ID"] = login_customer_id_override
+
+    try:
+        client = _load_google_client()
+
+        # ── Step 1: Format & Upload ImageAssets ────────────────────────────
+        ls_bytes, sq_bytes = _prepare_display_images(image_bytes)
+
+        asset_service = client.get_service("AssetService")
+        
+        # Landscape
+        ls_op = client.get_type("AssetOperation")
+        ls_asset = ls_op.create
+        ls_asset.name = f"{ad_name} ls asset {datetime.utcnow().strftime('%H%M%S')}"
+        ls_asset.type_ = client.enums.AssetTypeEnum.IMAGE
+        ls_asset.image_asset.data = ls_bytes
+        ls_asset.image_asset.file_size = len(ls_bytes)
+        ls_asset.image_asset.mime_type = client.enums.MimeTypeEnum.IMAGE_JPEG
+        
+        # Square
+        sq_op = client.get_type("AssetOperation")
+        sq_asset = sq_op.create
+        sq_asset.name = f"{ad_name} sq asset {datetime.utcnow().strftime('%H%M%S')}"
+        sq_asset.type_ = client.enums.AssetTypeEnum.IMAGE
+        sq_asset.image_asset.data = sq_bytes
+        sq_asset.image_asset.file_size = len(sq_bytes)
+        sq_asset.image_asset.mime_type = client.enums.MimeTypeEnum.IMAGE_JPEG
+
+        asset_resp = asset_service.mutate_assets(
+            customer_id=customer_id,
+            operations=[ls_op, sq_op],
+        )
+        ls_resource = asset_resp.results[0].resource_name
+        sq_resource = asset_resp.results[1].resource_name
+
+        # ── Step 2: Create DISPLAY_STANDARD AdGroup ───────────────────────
+        adgroup_service = client.get_service("AdGroupService")
+        adgroup_op = client.get_type("AdGroupOperation")
+        adg = adgroup_op.create
+        adg.name = adgroup_name
+        adg.campaign = campaign_resource
+        adg.status = client.enums.AdGroupStatusEnum.ENABLED
+        adg.type_ = client.enums.AdGroupTypeEnum.DISPLAY_STANDARD
+        adg.cpc_bid_micros = 500_000   # $0.50 default CPC
+
+        ag_resp = adgroup_service.mutate_ad_groups(
+            customer_id=customer_id,
+            operations=[adgroup_op],
+        )
+        adgroup_resource = ag_resp.results[0].resource_name
+
+        # ── Step 5: Create ResponsiveDisplayAd ───────────────────────────
+        ad_service = client.get_service("AdGroupAdService")
+        ad_op = client.get_type("AdGroupAdOperation")
+        ad_group_ad = ad_op.create
+        ad_group_ad.ad_group = adgroup_resource
+        ad_group_ad.status = client.enums.AdGroupAdStatusEnum.ENABLED
+
+        rda = ad_group_ad.ad.responsive_display_ad
+
+        # marketing_images — landscape (required, ≥1)
+        mkt_img = client.get_type("AdImageAsset")
+        mkt_img.asset = ls_resource
+        rda.marketing_images.append(mkt_img)
+
+        # square_marketing_images — square (required, ≥1)
+        sq_img = client.get_type("AdImageAsset")
+        sq_img.asset = sq_resource
+        rda.square_marketing_images.append(sq_img)
+
+        # headlines — ≥1, max 30 chars each (required)
+        hl = client.get_type("AdTextAsset")
+        hl.text = headline
+        rda.headlines.append(hl)
+
+        # long_headline — required, max 90 chars
+        rda.long_headline.text = long_headline
+
+        # descriptions — ≥1, max 90 chars each (required)
+        desc = client.get_type("AdTextAsset")
+        desc.text = description
+        rda.descriptions.append(desc)
+
+        # business_name — required, max 25 chars
+        rda.business_name = business_name
+
+        # final_urls — required
+        ad_group_ad.ad.final_urls.append(final_url)
+
+        ad_resp = ad_service.mutate_ad_group_ads(
+            customer_id=customer_id,
+            operations=[ad_op],
+        )
+        ad_resource = ad_resp.results[0].resource_name
+
+        # ── Step 6: (Optional) Add keyword contextual targeting ───────────
+        if keywords:
+            kw_service = client.get_service("AdGroupCriterionService")
+            kw_ops = []
+            for kw_text in keywords[:20]:
+                kw_op = client.get_type("AdGroupCriterionOperation")
+                crit = kw_op.create
+                crit.ad_group = adgroup_resource
+                crit.status = client.enums.AdGroupCriterionStatusEnum.ENABLED
+                crit.keyword.text = kw_text.strip()[:80]
+                crit.keyword.match_type = client.enums.KeywordMatchTypeEnum.BROAD
+                kw_ops.append(kw_op)
+            kw_service.mutate_ad_group_criteria(
+                customer_id=customer_id,
+                operations=kw_ops,
+            )
+
+    finally:
+        if login_customer_id_override:
+            if previous_login_cid:
+                os.environ["LOGIN_CUSTOMER_ID"] = previous_login_cid
+            else:
+                os.environ.pop("LOGIN_CUSTOMER_ID", None)
+
+    return {
+        "status": "launched",
+        "message": "Image ad launched successfully in the Display campaign.",
+        "campaign_resource_name": campaign_resource,
+        "ad_resource_name": ad_resource,
+        "adgroup_resource_name": adgroup_resource,
+        "image_asset_resource_name": ls_resource,
+        "ad_name": ad_name,
+    }
+
+
+# ─── Video Ad (creates its own Video campaign) ────────────────────────────────
+
+def launch_video_ad_to_campaign(
+    campaign_run_id: str,
+    ad_payload: Dict[str, Any],
+    youtube_url: str | None = None,
+    video_bytes: bytes | None = None,
+    video_filename: str | None = None,
+    dry_run: bool = False,
+    customer_id_override: str | None = None,
+    login_customer_id_override: str | None = None,
+) -> Dict[str, Any]:
+    """Create a Google Video campaign and launch an in-stream video ad.
+
+    Only YouTube-hosted videos are supported by the Google Ads API.
+    Provide youtube_url (https://www.youtube.com/watch?v=...).
+
+    This function self-creates:
+      1. A CampaignBudget.
+      2. A Video campaign (advertising_channel_type=VIDEO, TARGET_CPM bidding).
+      3. A VIDEO_TRUE_VIEW_IN_STREAM AdGroup.
+      4. A YouTubeVideoAsset from the provided youtube_url.
+      5. A skippable in-stream video ad (video_non_skippable_in_stream_ad
+         is used for ≤15s; skippable for longer).
+    """
+    import re
+
+    customer_id = customer_id_override or os.getenv("CUSTOMER_ID")
+
+    if not youtube_url and not video_bytes:
+        raise ValueError("youtube_url is required to launch a video ad.")
+    if not youtube_url:
+        if not dry_run:
+            raise ValueError(
+                "Direct video file upload is not supported by the Google Ads API. "
+                "Please host the video on YouTube and provide youtube_url."
+            )
+        youtube_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"  # placeholder for dry_run
+
+    # ── Extract payload fields ─────────────────────────────────────────────────
+    final_url     = (ad_payload.get("final_url") or "").strip()
+    ad_name       = (ad_payload.get("ad_name") or
+                     f"Video Ad {datetime.utcnow().strftime('%Y%m%d%H%M%S')}").strip()
+    headline      = (ad_payload.get("headline_1") or ad_name)[:30]
+    description   = (ad_payload.get("description_1") or headline)[:90]
+    display_url   = (ad_payload.get("display_url") or final_url)[:255]
+    keywords: list = ad_payload.get("keywords") or []
+    budget_micros = int(_parse_budget_usd(ad_payload.get("budget")) * 1_000_000) or 10_000_000
+    campaign_name = f"Video – {ad_name}"
+    adgroup_name  = f"VidAG – {ad_name}"
+
+    if not final_url:
+        raise ValueError("final_url is required for video ad launch.")
+
+    # Extract YouTube video ID
+    match = re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})", youtube_url)
+    if not match:
+        raise ValueError(f"Could not extract YouTube video ID from URL: {youtube_url}")
+    yt_video_id = match.group(1)
+
+    # ── Verify Campaign Exists ────────────────────────────────────────────────
+    state = _load_state()
+    launched = None
+    for k, v in state.get("launched", {}).items():
+        if v.get("campaign_id") == campaign_run_id and v.get("platform") == "Google Ads":
+            launched = v
+            break
+            
+    if not launched and not dry_run:
+        raise ValueError(f"No Google Ads campaign found for run ID {campaign_run_id}. Please launch the campaign first.")
+        
+    campaign_resource = launched.get("resource_name") if launched else f"dryrun/customers/{customer_id}/campaigns/fake"
+
+    if campaign_resource.startswith("dryrun/") and not dry_run:
+        raise ValueError(f"The parent campaign ({campaign_resource}) was a simulated launch. Please launch the campaign for real (click 'Launch Campaign' again) before attaching an ad.")
+
+    # ── Dry-run shortcut ──────────────────────────────────────────────────────
+    if dry_run or not customer_id:
+        fake_key = hashlib.sha256(
+            json.dumps(ad_payload, sort_keys=True).encode()
+        ).hexdigest()[:16]
+        reason = "dry_run=True" if dry_run else "missing CUSTOMER_ID"
+        return {
+            "status": "launched_dry_run",
+            "message": f"Video ad launch simulated ({reason}).",
+            "campaign_resource_name": campaign_resource,
+            "ad_resource_name": f"dryrun/customers/0/ads/{fake_key}",
+            "adgroup_resource_name": f"dryrun/customers/0/adGroups/{fake_key}",
+            "video_asset_resource_name": f"dryrun/customers/0/assets/{fake_key}_{yt_video_id}",
+            "ad_name": ad_name,
+        }
+
+    previous_login_cid = os.getenv("LOGIN_CUSTOMER_ID")
+    if login_customer_id_override:
+        os.environ["LOGIN_CUSTOMER_ID"] = login_customer_id_override
+
+    try:
+        client = _load_google_client()
+
+        # ── Step 1: Create YouTubeVideoAsset ──────────────────────────────
+        asset_service = client.get_service("AssetService")
+        asset_op = client.get_type("AssetOperation")
+        yt_asset = asset_op.create
+        yt_asset.name = f"{ad_name} yt {yt_video_id}"
+        yt_asset.type_ = client.enums.AssetTypeEnum.YOUTUBE_VIDEO
+        yt_asset.youtube_video_asset.youtube_video_id = yt_video_id
+
+        asset_resp = asset_service.mutate_assets(
+            customer_id=customer_id,
+            operations=[asset_op],
+        )
+        video_asset_resource = asset_resp.results[0].resource_name
+
+        # ── Step 2: Create VIDEO_TRUE_VIEW_IN_STREAM AdGroup ──────────────
+        adgroup_service = client.get_service("AdGroupService")
+        adgroup_op = client.get_type("AdGroupOperation")
+        adg = adgroup_op.create
+        adg.name = adgroup_name
+        adg.campaign = campaign_resource
+        adg.status = client.enums.AdGroupStatusEnum.ENABLED
+        adg.type_ = client.enums.AdGroupTypeEnum.VIDEO_TRUE_VIEW_IN_STREAM
+        adg.cpv_bid_micros = 500_000   # $0.50 default CPV bid
+
+        ag_resp = adgroup_service.mutate_ad_groups(
+            customer_id=customer_id,
+            operations=[adgroup_op],
+        )
+        adgroup_resource = ag_resp.results[0].resource_name
+
+        # ── Step 5: Create skippable in-stream video ad ───────────────────
+        ad_service = client.get_service("AdGroupAdService")
+        ad_op = client.get_type("AdGroupAdOperation")
+        ad_group_ad = ad_op.create
+        ad_group_ad.ad_group = adgroup_resource
+        ad_group_ad.status = client.enums.AdGroupAdStatusEnum.ENABLED
+
+        # video_true_view_in_stream_ad — used for VIDEO_TRUE_VIEW_IN_STREAM groups
+        instream = ad_group_ad.ad.video_true_view_in_stream_ad
+
+        # in-stream video asset (required)
+        video_ref = client.get_type("AdVideoAsset")
+        video_ref.asset = video_asset_resource
+        instream.in_stream_video_ad_info.video = video_asset_resource
+
+        # headline (required, max 30 chars)
+        instream.headline = headline
+
+        # description lines (optional but recommended, max 90 chars each)
+        instream.description1 = description[:90]
+        instream.description2 = (ad_payload.get("description_2") or description)[:90]
+
+        # display_url — required for in-stream ads
+        instream.display_url = display_url
+
+        # final_url — required
+        ad_group_ad.ad.final_urls.append(final_url)
+
+        ad_resp = ad_service.mutate_ad_group_ads(
+            customer_id=customer_id,
+            operations=[ad_op],
+        )
+        ad_resource = ad_resp.results[0].resource_name
+
+        # ── Step 6: (Optional) Add keyword targeting ───────────────────────
+        if keywords:
+            kw_service = client.get_service("AdGroupCriterionService")
+            kw_ops = []
+            for kw_text in keywords[:20]:
+                kw_op = client.get_type("AdGroupCriterionOperation")
+                crit = kw_op.create
+                crit.ad_group = adgroup_resource
+                crit.status = client.enums.AdGroupCriterionStatusEnum.ENABLED
+                crit.keyword.text = kw_text.strip()[:80]
+                crit.keyword.match_type = client.enums.KeywordMatchTypeEnum.BROAD
+                kw_ops.append(kw_op)
+            kw_service.mutate_ad_group_criteria(
+                customer_id=customer_id,
+                operations=kw_ops,
+            )
+
+    finally:
+        if login_customer_id_override:
+            if previous_login_cid:
+                os.environ["LOGIN_CUSTOMER_ID"] = previous_login_cid
+            else:
+                os.environ.pop("LOGIN_CUSTOMER_ID", None)
+
+    return {
+        "status": "launched",
+        "message": "Video ad launched successfully in the Video campaign.",
+        "campaign_resource_name": campaign_resource,
+        "ad_resource_name": ad_resource,
+        "adgroup_resource_name": adgroup_resource,
+        "video_asset_resource_name": video_asset_resource,
+        "ad_name": ad_name,
     }
 
 

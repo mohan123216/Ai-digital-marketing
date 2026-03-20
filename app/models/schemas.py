@@ -153,11 +153,17 @@ class CampaignHistoryItem(BaseModel):
     predicted_roi: Optional[float] = None
     output: Dict[str, Any]
     launched_platforms: List[str] = Field(default_factory=list)
+    google_ads_type: Optional[str] = None
+    meta_campaign_id: Optional[str] = None
+    meta_adset_id: Optional[str] = None
+    meta_platform: Optional[str] = None
+    meta_assets: Optional[Dict[str, Any]] = None
 
 
 class GoogleAdsLaunchRequest(BaseModel):
     campaign_id: str
     recommendation: Dict[str, Any]
+    ad_type: str = Field(default="text", description="Type of ad: 'text', 'image', or 'video'")
     customer_id: Optional[str] = None
     budget_resource_name: Optional[str] = None
     login_customer_id: Optional[str] = None
@@ -179,3 +185,109 @@ class MetaAdsLaunchRequest(BaseModel):
 class MetaAdsLaunchStatusRequest(BaseModel):
     campaign_id: str
     recommendation: Dict[str, Any]
+
+
+# ─── Ad Launch Schemas ──────────────────────────────────────────────────────
+
+class LaunchAdRequest(BaseModel):
+    """Payload for launching a new ad inside an already-launched campaign."""
+    ad_name: Optional[str] = Field(None, description="Friendly name for this ad (optional)")
+    ad_type: str = Field("text", description="Ad type: 'text', 'image', or 'video'")
+    headline_1: Optional[str] = Field(None, max_length=30, description="Headline 1 (max 30 chars)")
+    headline_2: Optional[str] = Field(None, max_length=30, description="Headline 2 (max 30 chars)")
+    headline_3: Optional[str] = Field(None, max_length=30, description="Headline 3 (max 30 chars)")
+    description_1: Optional[str] = Field(None, max_length=90, description="Description 1 (max 90 chars)")
+    description_2: Optional[str] = Field(None, max_length=90, description="Description 2 (max 90 chars)")
+    final_url: str = Field(..., description="Landing page URL")
+    display_url_path_1: Optional[str] = Field(None, max_length=15, description="Display path 1 (max 15 chars)")
+    display_url_path_2: Optional[str] = Field(None, max_length=15, description="Display path 2 (max 15 chars)")
+    keywords: Optional[List[str]] = Field(default_factory=list, description="Keywords to add to the Ad Group")
+    long_headline: Optional[str] = Field(None, max_length=90, description="Long headline for image/display ads")
+    business_name: Optional[str] = Field(None, max_length=25, description="Business name shown on image ads")
+    call_to_action: Optional[str] = Field(None, max_length=15, description="Call-to-action text for video ads (max 15 chars, e.g. 'Learn More')")
+    dry_run: bool = Field(False, description="If true, simulate without calling Google Ads API")
+
+
+class LaunchAdResponse(BaseModel):
+    id: str
+    campaign_run_id: str
+    ad_name: Optional[str]
+    ad_type: str = "text"
+    headline_1: Optional[str]
+    headline_2: Optional[str]
+    headline_3: Optional[str]
+    description_1: Optional[str]
+    description_2: Optional[str]
+    final_url: str
+    display_url_path_1: Optional[str]
+    display_url_path_2: Optional[str]
+    keywords: List[str]
+    long_headline: Optional[str]
+    business_name: Optional[str]
+    media_url: Optional[str]
+    media_file_name: Optional[str]
+    media_content_type: Optional[str]
+    media_size_bytes: Optional[int]
+    status: str
+    platform: str
+    google_ad_resource_name: Optional[str]
+    google_adgroup_resource_name: Optional[str]
+    dry_run: bool
+    created_at: str
+
+
+class CampaignAdItem(BaseModel):
+    id: str
+    campaign_run_id: str
+    ad_name: Optional[str]
+    ad_type: str = "text"
+    headline_1: Optional[str]
+    headline_2: Optional[str]
+    headline_3: Optional[str]
+    description_1: Optional[str]
+    description_2: Optional[str]
+    final_url: str
+    display_url_path_1: Optional[str]
+    display_url_path_2: Optional[str]
+    keywords: List[str]
+    long_headline: Optional[str]
+    business_name: Optional[str]
+    media_url: Optional[str]
+    media_file_name: Optional[str]
+    media_content_type: Optional[str]
+    media_size_bytes: Optional[int]
+    status: str
+    platform: str
+    google_ad_resource_name: Optional[str]
+    google_adgroup_resource_name: Optional[str]
+    dry_run: bool
+    created_at: str
+
+
+class OptimizeRequest(BaseModel):
+    """Request body for the campaign optimization endpoint."""
+    campaign_run_id: str = Field(..., description="Supabase campaign run UUID")
+    platform: str = Field(default="Google Ads", description="Platform to optimize")
+    dry_run: bool = Field(default=False, description="Simulate without applying changes to the ad platform")
+    use_mock_data: bool = Field(default=False, description="Inject simulated metrics instead of fetching from Google Ads API")
+    user_overrides: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional user-edited values to apply instead of computed values. E.g. {'new_budget_usd': 25.0}"
+    )
+
+
+class MetaOptimizeRequest(BaseModel):
+    """Request body for the Meta Ads campaign optimization endpoint."""
+    campaign_run_id: str = Field(..., description="Supabase campaign run UUID")
+    dry_run: bool = Field(default=False, description="Simulate without applying changes")
+    use_mock_data: bool = Field(default=False, description="Use simulated metrics for testing")
+    user_overrides: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional user-edited values, e.g. {'new_budget_usd': 25.0}"
+    )
+
+
+class OptimizationUndoRequest(BaseModel):
+    """Request body for undoing an optimization."""
+    optimization_id: str = Field(..., description="ID of the optimization record to undo")
+    platform: str = Field(default="Google Ads", description="Platform the optimization was applied to")
