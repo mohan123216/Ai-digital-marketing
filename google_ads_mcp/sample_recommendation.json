@@ -1,0 +1,15 @@
+{
+  "campaign_id": "demo-campaign-1",
+  "recommendations": [
+    {
+      "platform": "Google Ads",
+      "target_location": "United States",
+      "target_segment": "Sportswear Shoppers",
+      "target_age_group": "25-34",
+      "budget": "$12000",
+      "predicted_roi": 22.1,
+      "predicted_conversion_rate": 8.9,
+      "confidence": "92%"
+    }
+  ]
+}

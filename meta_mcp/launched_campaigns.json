@@ -1,0 +1,66 @@
+{
+  "launched": {
+    "003fe4eaf0748020d11e": {
+      "campaign_id": "ffed8688-f2e2-4730-a953-855617abbd61",
+      "platform": "Instagram",
+      "meta_campaign_id": "120239507551400711",
+      "meta_adset_id": "120239507551510711",
+      "launched_at": "2026-03-08T04:12:58.444565Z",
+      "recommendation": {
+        "budget": "1,771",
+        "platform": "Instagram",
+        "rationale": "For Watch, this mix shows strong expected returns for conversions.",
+        "confidence": "95%",
+        "risk_level": "Low",
+        "predicted_roi": 18.11,
+        "target_gender": "All",
+        "target_segment": "Fashionistas",
+        "expected_clicks": 40948,
+        "target_language": null,
+        "target_location": "United States",
+        "target_age_group": "25-34",
+        "target_interests": [],
+        "expected_impressions": 61998,
+        "predicted_conversion_rate": 6.6,
+        "duration_days": 30,
+        "campaign_goal": "conversions",
+        "product_name": "Watch",
+        "product_category": null
+      },
+      "daily_budget_minor_units": 10000,
+      "daily_budget_usd": 59.03,
+      "launchable": false
+    },
+    "17e29ffa96320a95936a": {
+      "campaign_id": "ffed8688-f2e2-4730-a953-855617abbd61",
+      "platform": "Facebook",
+      "meta_campaign_id": "120239511018310711",
+      "meta_adset_id": "120239511019130711",
+      "launched_at": "2026-03-08T07:35:47.646639Z",
+      "recommendation": {
+        "budget": "1,520",
+        "platform": "Facebook",
+        "rationale": "This Facebook setup matches Fashionistas audiences in United States.",
+        "confidence": "95%",
+        "risk_level": "Low",
+        "predicted_roi": 15.53,
+        "target_gender": "All",
+        "target_segment": "Fashionistas",
+        "expected_clicks": 28342,
+        "target_language": null,
+        "target_location": "United States",
+        "target_age_group": "25-34",
+        "target_interests": [],
+        "expected_impressions": 42557,
+        "predicted_conversion_rate": 6.66,
+        "duration_days": 30,
+        "campaign_goal": "conversions",
+        "product_name": "Watch",
+        "product_category": null
+      },
+      "daily_budget_minor_units": 10000,
+      "daily_budget_usd": 50.67,
+      "launchable": false
+    }
+  }
+}
