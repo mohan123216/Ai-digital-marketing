@@ -10,9 +10,12 @@ config = {
     "client_id": os.getenv("CLIENT_ID"),
     "client_secret": os.getenv("CLIENT_SECRET"),
     "refresh_token": os.getenv("REFRESH_TOKEN"),
-    "login_customer_id": os.getenv("LOGIN_CUSTOMER_ID"),
     "use_proto_plus": True,
 }
+
+login_cid = os.getenv("LOGIN_CUSTOMER_ID")
+if login_cid:
+    config["login_customer_id"] = login_cid
 
 client = GoogleAdsClient.load_from_dict(config)
 
