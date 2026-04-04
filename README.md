@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-# Ai-digital-marketing
-AI-powered digital marketing automation system
-=======
 # AI Marketing Planner with Supabase Storage
 
 This project includes:
@@ -55,4 +51,3 @@ Backend URL: `http://localhost:8000`
 3. Backend returns JWT access token.
 4. Frontend calls protected endpoints with `Authorization: Bearer <token>`.
 5. Backend validates JWT and stores campaign outputs in Supabase `campaign_runs`.
->>>>>>> ff79dd2 (Your message)
