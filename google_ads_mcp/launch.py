@@ -166,6 +166,36 @@ def _parse_budget_usd(value: Any) -> float:
         return 0.0
 
 
+
+def _validate_final_url(url: str) -> tuple[bool, str]:
+    """Validate final_url for Google Ads.
+    
+    Returns: (is_valid, error_message)
+    """
+    if not url or not url.strip():
+        return False, "Final URL is required."
+    
+    url = url.strip()
+    
+    # Check for localhost
+    if 'localhost' in url.lower():
+        return False, "Final URL cannot be 'localhost'. Please provide a valid domain (e.g., https://example.com)."
+    
+    # Check for valid protocol
+    if not (url.startswith('http://') or url.startswith('https://')):
+        return False, "Final URL must start with http:// or https://"
+    
+    # Check for valid domain structure
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if not parsed.netloc or '.' not in parsed.netloc:
+            return False, "Final URL must contain a valid domain with a top-level domain (e.g., .com, .org)."
+    except Exception:
+        return False, "Invalid URL format."
+    
+    return True, ""
+
 def _load_google_client():
     from google.ads.googleads.client import GoogleAdsClient
 
@@ -209,6 +239,7 @@ def launch_selected_recommendation(
     customer_id_override: str | None = None,
     budget_resource_override: str | None = None,
     login_customer_id_override: str | None = None,
+    campaign_name_override: str | None = None,
 ) -> Dict[str, Any]:
     """Launch a Google Ads campaign from a selected recommendation.
 
@@ -248,17 +279,27 @@ def launch_selected_recommendation(
     predicted_roi = recommendation.get("predicted_roi", "N/A")
     predicted_conv = recommendation.get("predicted_conversion_rate", "N/A")
 
-    campaign_name = (
-        f"AI {segment} {location} {age_group} "
-        f"ROI{predicted_roi} CR{predicted_conv} B{int(budget_usd)} {key}"
-    )[:255]
+    if campaign_name_override:
+        campaign_name = campaign_name_override[:255]
+    else:
+        campaign_name = f"AI - {segment} ({location}, {age_group})".replace("  ", " ")[:100]
     _print_campaign_metrics(campaign_name, recommendation)
 
     try:
         if dry_run:
             resource_name = f"dryrun/customers/{customer_id}/campaigns/{key}"
         else:
-            client = _load_google_client()
+            try:
+                client = _load_google_client()
+            except Exception as auth_err:
+                error_str = str(auth_err)
+                if "invalid_grant" in error_str:
+                    return {
+                        "status": "auth_error",
+                        "message": "Google Ads authentication failed. Your OAuth refresh token has expired. Please re-authenticate with Google Ads.",
+                        "error_type": "invalid_grant",
+                    }
+                raise
             
             # Create a non-shared budget for the campaign
             budget_service = client.get_service("CampaignBudgetService")
@@ -404,7 +445,9 @@ def launch_ad_to_campaign(
     path2 = ad_payload.get("display_url_path_2") or ""
     keywords: list = ad_payload.get("keywords") or []
     ad_name = ad_payload.get("ad_name") or f"AI Ad {datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-    adgroup_name = f"AdGroup – {ad_name}"
+    # Add timestamp suffix to ensure unique ad group names within the campaign
+    timestamp_suffix = datetime.utcnow().strftime('%H%M%S')
+    adgroup_name = f"AdGroup – {ad_name} {timestamp_suffix}"
 
     if not campaign_resource:
         raise ValueError(f"No Google Ads campaign found for run ID {campaign_run_id}. Please launch the campaign first.")
@@ -476,6 +519,14 @@ def launch_ad_to_campaign(
 
         rsa.headlines.extend([_hl(headline_1), _hl(headline_2), _hl(headline_3)])
         rsa.descriptions.extend([_desc(description_1), _desc(description_2)])
+
+        # Validate final_url before appending
+        is_valid, error_msg = _validate_final_url(final_url)
+        if not is_valid:
+            return {
+                "status": "validation_error",
+                "message": f"Ad launch failed: {error_msg}",
+            }
 
         ad_group_ad.ad.final_urls.append(final_url)
         if path1:
@@ -685,6 +736,14 @@ def launch_image_ad_to_campaign(
         rda.business_name = business_name
 
         # final_urls — required
+        # Validate final_url before appending
+        is_valid, error_msg = _validate_final_url(final_url)
+        if not is_valid:
+            return {
+                "status": "validation_error",
+                "message": f"Ad launch failed: {error_msg}",
+            }
+
         ad_group_ad.ad.final_urls.append(final_url)
 
         ad_resp = ad_service.mutate_ad_group_ads(
@@ -883,6 +942,14 @@ def launch_video_ad_to_campaign(
         instream.display_url = display_url
 
         # final_url — required
+        # Validate final_url before appending
+        is_valid, error_msg = _validate_final_url(final_url)
+        if not is_valid:
+            return {
+                "status": "validation_error",
+                "message": f"Ad launch failed: {error_msg}",
+            }
+
         ad_group_ad.ad.final_urls.append(final_url)
 
         ad_resp = ad_service.mutate_ad_group_ads(

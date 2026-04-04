@@ -212,10 +212,14 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+# Normalize configured frontend origin to avoid mismatch on trailing slash.
+frontend_origin = settings.FRONTEND_URL.rstrip("/")
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL, "http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -441,6 +445,7 @@ async def launch_google_ads_campaign(
             customer_id_override=payload.customer_id,
             budget_resource_override=payload.budget_resource_name,
             login_customer_id_override=payload.login_customer_id,
+                    campaign_name_override=payload.campaign_name,
         )
         logger.info(
             "Google Ads launch request processed for user=%s campaign_id=%s status=%s",
@@ -448,6 +453,13 @@ async def launch_google_ads_campaign(
             payload.campaign_id,
             result.get("status"),
         )
+
+        # Handle auth errors gracefully
+        if result.get("status") == "auth_error":
+            raise HTTPException(
+                status_code=401,
+                detail=result.get("message", "Google Ads authentication failed")
+            )
 
         # If successfully launched (not a duplicate), persist the platform into the DB row
         if result.get("status") == "launched" or result.get("status") == "launched_dry_run":
@@ -543,6 +555,18 @@ async def launch_meta_ads_campaign(
         )
     except Exception as e:
         logger.exception(f"Meta launch failed: {e}")
+        msg = str(e).lower()
+        if (
+            "error validating access token" in msg
+            or '"code": 190' in msg
+            or '"error_subcode": 463' in msg
+            or "session has expired" in msg
+            or "meta access token is expired" in msg
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="Meta access token expired. Reconnect Meta (or update META_ACCESS_TOKEN) and try again.",
+            )
         raise HTTPException(status_code=500, detail=f"Launch failed: {str(e)}")
 
 
@@ -1521,6 +1545,147 @@ async def get_customer_segments():
     return {
         "segments": data_analyzer.summary_stats.get('customer_segments', [])
     }
+
+
+# ============================================================================
+# SCALEUP ANALYSIS ENDPOINT
+# ============================================================================
+
+@app.get(f"{settings.API_V1_PREFIX}/scaleup/campaign/{{campaign_id}}/analysis", tags=["ScaleUp"])
+async def get_campaign_scaleup_analysis(campaign_id: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Analyze a specific campaign and provide scaling recommendations.
+    
+    Returns:
+    - Campaign performance metrics
+    - ROI by platform
+    - Scaling recommendations (increase budget vs switch platform)
+    - Comparison with other platforms
+    """
+    try:
+        user_id = current_user["id"]
+        db = get_supabase_admin_client()
+        
+        # Get the specific campaign
+        campaign_resp = (
+            db.table(settings.SUPABASE_CAMPAIGN_TABLE)
+            .select("*")
+            .eq("id", campaign_id)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+        
+        if not campaign_resp.data:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        
+        campaign = campaign_resp.data
+        output = campaign.get("output") or {}
+        recommendations = output.get("recommendations", [])
+        launched_platforms = campaign.get("launched_platforms", [])
+        
+        # Build platform comparison for this specific campaign
+        platform_options = []
+        best_platform = None
+        best_roi = 0
+        
+        for rec in recommendations:
+            platform = rec.get("platform", "Unknown")
+            predicted_roi = rec.get("predicted_roi", 1.0)
+            predicted_cr = rec.get("predicted_conversion_rate", 2.0)
+            budget = rec.get("budget", "0")
+            
+            try:
+                budget_val = float(str(budget).replace("$", "").replace(",", ""))
+            except (ValueError, TypeError):
+                budget_val = 0
+            
+            is_launched = platform in launched_platforms
+            
+            platform_option = {
+                "platform": platform,
+                "predicted_roi": predicted_roi,
+                "predicted_conversion_rate": predicted_cr,
+                "budget": budget_val,
+                "is_launched": is_launched,
+                "confidence": rec.get("confidence", "Medium"),
+                "rationale": rec.get("rationale", "")
+            }
+            platform_options.append(platform_option)
+            
+            # Track best platform
+            if predicted_roi > best_roi:
+                best_roi = predicted_roi
+                best_platform = platform_option
+        
+        # Determine scaling recommendation
+        scaling_action = "none"
+        scaling_reason = ""
+        suggested_increase = None
+        recommended_platform = None
+        
+        if best_platform:
+            if best_platform["is_launched"]:
+                # Campaign is already on best platform - recommend scaling up budget
+                if best_platform["predicted_roi"] >= 2.0:
+                    scaling_action = "scale_up_budget"
+                    suggested_increase = best_platform["budget"] * 1.5  # 50% increase
+                    scaling_reason = f"This campaign shows strong ROI of {best_platform['predicted_roi']:.2f}x on {best_platform['platform']}. Scale up the budget by 50% to increase returns."
+                else:
+                    scaling_action = "maintain"
+                    scaling_reason = f"ROI is stable at {best_platform['predicted_roi']:.2f}x. Monitor performance before scaling."
+            else:
+                # Campaign not on best platform yet - recommend launch or switch
+                launched_platform = launched_platforms[0] if launched_platforms else None
+                if launched_platform:
+                    current_rec = next((r for r in recommendations if r.get("platform") == launched_platform), None)
+                    current_roi = current_rec.get("predicted_roi", 1.0) if current_rec else 1.0
+                    
+                    if best_platform["predicted_roi"] > current_roi * 1.5:
+                        scaling_action = "switch_platform"
+                        recommended_platform = best_platform["platform"]
+                        scaling_reason = f"{best_platform['platform']} shows {(best_platform['predicted_roi'] / current_roi):.1f}x better ROI ({best_platform['predicted_roi']:.2f}x vs {current_roi:.2f}x). Consider moving budget here."
+                    else:
+                        scaling_action = "add_platform"
+                        recommended_platform = best_platform["platform"]
+                        scaling_reason = f"Expand to {best_platform['platform']} to diversify. Expected ROI: {best_platform['predicted_roi']:.2f}x"
+                else:
+                    scaling_action = "launch"
+                    recommended_platform = best_platform["platform"]
+                    scaling_reason = f"Launch on {best_platform['platform']} for best expected ROI: {best_platform['predicted_roi']:.2f}x"
+        
+        # Sort platforms by ROI for comparison
+        sorted_platforms = sorted(platform_options, key=lambda x: x["predicted_roi"], reverse=True)
+        
+        return {
+            "status": "success",
+            "campaign": {
+                "id": campaign_id,
+                "name": campaign.get("product_name"),
+                "goal": campaign.get("campaign_goal"),
+                "budget_range": {
+                    "min": campaign.get("budget_min", 0),
+                    "max": campaign.get("budget_max", 0)
+                },
+                "predicted_roi": campaign.get("predicted_roi", 1.0),
+                "launched_platforms": launched_platforms
+            },
+            "platform_analysis": sorted_platforms,
+            "best_platform": best_platform,
+            "scaling_recommendation": {
+                "action": scaling_action,
+                "reason": scaling_reason,
+                "suggested_budget": suggested_increase,
+                "recommended_platform": recommended_platform
+            }
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Campaign scaleup analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
 
 # ============================================================================
 # RUN

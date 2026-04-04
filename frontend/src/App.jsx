@@ -141,6 +141,9 @@ export default function App() {
   const [metricsModal, setMetricsModal] = useState({ open: false, campaignRunId: null, data: null, error: "", loading: false });
   const [selectedMetricsItem, setSelectedMetricsItem] = useState(null);
   const [optimizeModal, setOptimizeModal] = useState({ open: false, campaignRunId: null, campaignName: "", dryRun: true, useMockData: false, loading: false, result: null, error: "", history: [] });
+  const [scaleupData, setScaleupData] = useState(null);
+  const [scaleupLoading, setScaleupLoading] = useState(false);
+  const [scaleupError, setScaleupError] = useState("");
 
   useEffect(() => {
     api.getSegments().then(r => setSegments(r.segments || [])).catch(() => {});
@@ -242,8 +245,9 @@ export default function App() {
     };
     try {
       let response;
-      if (platform === "Google Ads") response = await api.launchGoogleAds(accessToken, { campaign_id: campaignRunId, recommendation: payload, ad_type: adType, dry_run: false });
+          if (platform === "Google Ads") response = await api.launchGoogleAds(accessToken, { campaign_id: campaignRunId, recommendation: payload, ad_type: adType, campaign_name: form.campaign_name || undefined, dry_run: false });
       else if (platform === "Instagram" || platform === "Facebook") response = await api.launchMetaAds(accessToken, { campaign_id: campaignRunId, recommendation: payload, dry_run: false });
+          else if (platform === "Instagram" || platform === "Facebook") response = await api.launchMetaAds(accessToken, { campaign_id: campaignRunId, recommendation: payload, campaign_name: form.campaign_name || undefined, dry_run: false });
       else { await new Promise(r => setTimeout(r, 1500)); response = { status: "launched", message: `Campaign is live on ${platform}.` }; }
       if (response.status === "already_launched") setLaunchModal({ open: true, platform, status: "error", message: response.message });
       else {
@@ -278,12 +282,26 @@ export default function App() {
   const closeAdModal = () => { if (mediaPreview) URL.revokeObjectURL(mediaPreview); setAdModal({ open: false, campaignRunId: null, status: "idle" }); setAdForm(initialAdForm); setAdFormError(""); setMediaFile(null); setMediaPreview(null); };
   const applyFile = (f) => { if (!f) return; setMediaFile(f); if (mediaPreview) URL.revokeObjectURL(mediaPreview); setMediaPreview(URL.createObjectURL(f)); };
 
+  const validateFinalUrl = (url) => {
+    if (!url || !url.trim()) return "Final URL is required.";
+    url = url.trim();
+    if (url.toLowerCase().includes('localhost')) return "Final URL cannot be 'localhost'. Please provide a valid domain (e.g., https://example.com).";
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return "Final URL must start with http:// or https://";
+    try {
+      const u = new URL(url);
+      if (!u.hostname || !u.hostname.includes('.')) return "Final URL must contain a valid domain with a top-level domain (e.g., .com, .org).";
+    } catch { return "Invalid URL format."; }
+    return null;
+  };
+
+
   const submitAd = async (e) => {
     e.preventDefault(); setAdFormError("");
     const { ad_name, headline_1, headline_2, headline_3, description_1, description_2, final_url, display_url_path_1, display_url_path_2, keywords_raw } = adForm;
     if (!headline_1.trim() || !headline_2.trim() || !headline_3.trim()) { setAdFormError("All three headlines are required."); return; }
     if (!description_1.trim() || !description_2.trim()) { setAdFormError("Both descriptions are required."); return; }
-    if (!final_url.trim()) { setAdFormError("Final URL is required."); return; }
+    const urlError = validateFinalUrl(final_url);
+    if (urlError) { setAdFormError(urlError); return; }
     const keywords = keywords_raw.split(",").map(k => k.trim()).filter(Boolean);
     const payload = { ad_name: ad_name.trim() || null, ad_type: "text", headline_1: headline_1.trim(), headline_2: headline_2.trim(), headline_3: headline_3.trim(), description_1: description_1.trim(), description_2: description_2.trim(), final_url: final_url.trim(), display_url_path_1: display_url_path_1.trim() || null, display_url_path_2: display_url_path_2.trim() || null, keywords, dry_run: false };
     setLoadingAd(true); setAdModal(p => ({ ...p, status: "launching" }));
@@ -326,6 +344,7 @@ export default function App() {
     { id: "plan", icon: "📝", label: "Plan Campaign" },
     { id: "metrics", icon: "📈", label: "Metrics" },
     { id: "optimize", icon: "⚡", label: "Optimize" },
+    { id: "scaleup", icon: "📈", label: "Scale Up" },
     { id: "settings", icon: "⚙️", label: "Settings" },
   ];
 
@@ -361,6 +380,7 @@ export default function App() {
                 <div className="el-row">
                   <label>Budget ($)<input type="number" min="1" value={form.budget} onChange={e => setForm("budget", e.target.value)} /></label>
                   <label>Duration (days)<input type="number" min="1" max="365" value={form.duration_days} onChange={e => setForm("duration_days", e.target.value)} /></label>
+                                <label>Campaign Name<input type="text" placeholder="e.g. My Campaign 2024" value={form.campaign_name} onChange={e => setForm("campaign_name", e.target.value)} /></label>
                 </div>
                 <label>Target Location<input type="text" placeholder="e.g. United States" value={form.target_location} onChange={e => setForm("target_location", e.target.value)} /></label>
                 <label>Target Segment<input type="text" placeholder="e.g. Young Professionals" value={form.target_segment} onChange={e => setForm("target_segment", e.target.value)} /></label>
@@ -1026,8 +1046,152 @@ export default function App() {
           );
         })()}
 
+        {/* Scale Up */}
+        {dashTab === "scaleup" && (
+          <div className="dash-section">
+            <div className="dash-page-header">
+              <h1>📈 Scale Up Your Campaigns</h1>
+              <p className="subtext">Select a campaign to analyze scaling opportunities</p>
+            </div>
+            {history.length === 0 ? (
+              <div className="empty-state"><p>📊</p><h3>No campaigns yet</h3><p className="subtext">Create and launch campaigns to see scaling recommendations.</p><button className="btn-primary" onClick={() => setDashTab("plan")}>Plan Your First Campaign</button></div>
+            ) : (
+              <div className="scaleup-analysis">
+                {/* Campaign List */}
+                <div className="card" style={{ marginBottom: "1.5rem" }}>
+                  <h2>Select a Campaign to Analyze</h2>
+                  <div className="campaigns-scaleup-list">
+                    {history.map(c => (
+                      <div key={c.id} className={`campaign-scaleup-row${selectedMetricsItem?.id === c.id ? " selected" : ""}`} onClick={() => setSelectedMetricsItem({ id: c.id })}>
+                        <div className="csr-main">
+                          <h4>{c.product_name}</h4>
+                          <div className="csr-meta">
+                            <span className="cr-goal">{c.campaign_goal}</span>
+                            <span>${c.budget_min}-${c.budget_max}</span>
+                            <span style={{ color: "#10b981", fontWeight: "600" }}>{c.predicted_roi}x ROI</span>
+                          </div>
+                        </div>
+                        <div className="csr-platforms">
+                          {c.launched_platforms.length > 0 ? (
+                            c.launched_platforms.map(p => <span key={p} className="platform-chip-mini">{p}</span>)
+                          ) : (
+                            <span className="chip-pending-mini">Not launched</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
 
+                {/* Campaign Analysis */}
+                {selectedMetricsItem && (
+                  <button className="btn-primary" style={{ marginBottom: "1.5rem" }} disabled={scaleupLoading} onClick={async () => {
+                    setScaleupLoading(true); setScaleupError("");
+                    try { const data = await api.getCampaignScaleupAnalysis(accessToken, selectedMetricsItem.id); setScaleupData(data); }
+                    catch (err) { setScaleupError(err.message || "Failed to analyze campaign."); }
+                    finally { setScaleupLoading(false); }
+                  }}>
+                    {scaleupLoading ? "Analyzing…" : "🔍 Analyze Scaling Options"}
+                  </button>
+                )}
 
+                {scaleupError && <p className="alert" style={{ marginBottom: "1rem" }}>{scaleupError}</p>}
+
+                {scaleupData && (
+                  <div className="campaign-scaleup-details">
+                    {/* Campaign Header */}
+                    <div className="card csd-header" style={{ marginBottom: "1.5rem" }}>
+                      <div>
+                        <h2>{scaleupData.campaign.name}</h2>
+                        <p className="subtext">{scaleupData.campaign.goal} • ${scaleupData.campaign.budget_range.min}-${scaleupData.campaign.budget_range.max} • {scaleupData.campaign.predicted_roi}x ROI</p>
+                      </div>
+                      <div className="csd-status">
+                        {scaleupData.campaign.launched_platforms.length > 0 ? (
+                          <>
+                            <div style={{ fontSize: "0.85rem", color: "var(--muted)", marginBottom: "0.5rem" }}>Launched on:</div>
+                            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                              {scaleupData.campaign.launched_platforms.map(p => <span key={p} className="platform-chip">{p}</span>)}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="chip-pending">Not launched yet</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Platform Comparison */}
+                    <div className="card" style={{ marginBottom: "1.5rem" }}>
+                      <h2>🏆 Platform Comparison for This Campaign</h2>
+                      <div className="platform-comparison-grid">
+                        {scaleupData.platform_analysis.map((p, idx) => (
+                          <div key={p.platform} className={`platform-rank-card${p === scaleupData.best_platform ? " best-platform" : ""}`}>
+                            {p === scaleupData.best_platform && <div className="pbest-badge">✓ Best Choice</div>}
+                            <h3>{p.platform}</h3>
+                            <div className="prc-metric">
+                              <span>Expected ROI</span>
+                              <strong style={{ color: p === scaleupData.best_platform ? "#10b981" : "#64748b", fontSize: "1.3rem" }}>{p.predicted_roi}x</strong>
+                            </div>
+                            <div className="prc-metric">
+                              <span>Conv. Rate</span>
+                              <strong>{p.predicted_conversion_rate}%</strong>
+                            </div>
+                            <div className="prc-metric">
+                              <span>Budget</span>
+                              <strong>${p.budget.toLocaleString()}</strong>
+                            </div>
+                            <div style={{ marginTop: "1rem", padding: "0.75rem", background: "rgba(0,0,0,0.2)", borderRadius: "8px", fontSize: "0.85rem" }}>
+                              {p.is_launched ? (
+                                <span style={{ color: "#10b981", fontWeight: "600" }}>✓ Currently launched</span>
+                              ) : (
+                                <span style={{ color: "var(--muted)" }}>Not launched on this platform</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Scaling Recommendation */}
+                    <div className={`card csd-recommendation${scaleupData.scaling_recommendation.action === "scale_up_budget" ? " recommend-increase" : scaleupData.scaling_recommendation.action === "switch_platform" ? " recommend-switch" : ""}`}>
+                      <div className="csr-icon">
+                        {scaleupData.scaling_recommendation.action === "scale_up_budget" && <span style={{ fontSize: "2rem" }}>📈</span>}
+                        {scaleupData.scaling_recommendation.action === "switch_platform" && <span style={{ fontSize: "2rem" }}>🔄</span>}
+                        {scaleupData.scaling_recommendation.action === "add_platform" && <span style={{ fontSize: "2rem" }}>➕</span>}
+                        {scaleupData.scaling_recommendation.action === "launch" && <span style={{ fontSize: "2rem" }}>🚀</span>}
+                        {scaleupData.scaling_recommendation.action === "maintain" && <span style={{ fontSize: "2rem" }}>✅</span>}
+                        {scaleupData.scaling_recommendation.action === "none" && <span style={{ fontSize: "2rem" }}>👀</span>}
+                      </div>
+                      <div className="csr-content">
+                        <h3>
+                          {scaleupData.scaling_recommendation.action === "scale_up_budget" && "Scale Up Budget"}
+                          {scaleupData.scaling_recommendation.action === "switch_platform" && "Switch to Better Platform"}
+                          {scaleupData.scaling_recommendation.action === "add_platform" && "Expand to Additional Platform"}
+                          {scaleupData.scaling_recommendation.action === "launch" && "Launch Campaign"}
+                          {scaleupData.scaling_recommendation.action === "maintain" && "Maintain Current Performance"}
+                          {scaleupData.scaling_recommendation.action === "none" && "No Action Recommended"}
+                        </h3>
+                        <p>{scaleupData.scaling_recommendation.reason}</p>
+                        {scaleupData.scaling_recommendation.suggested_budget && (
+                          <div style={{ marginTop: "1rem", padding: "1rem", background: "rgba(16,185,129,0.1)", borderRadius: "10px", border: "1px solid rgba(16,185,129,0.2)" }}>
+                            <span style={{ color: "var(--muted)", fontSize: "0.9rem" }}>Suggested new budget: </span>
+                            <strong style={{ color: "#10b981", fontSize: "1.1rem" }}>${scaleupData.scaling_recommendation.suggested_budget.toLocaleString()}</strong>
+                          </div>
+                        )}
+                        {scaleupData.scaling_recommendation.recommended_platform && (
+                          <div style={{ marginTop: "1rem" }}>
+                            <button className="btn-launch" onClick={() => { loadHistoryItem(history.find(h => h.id === selectedMetricsItem.id)); setDashTab("campaigns"); }}>
+                              View Campaign & Take Action →
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Settings */}
         {dashTab === "settings" && (

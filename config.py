@@ -3,10 +3,17 @@ import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
+from dotenv import load_dotenv
+
+
+BASE_DIR = Path(__file__).resolve().parent
+# Load both env files so API routes that use os.getenv can see Google Ads vars.
+load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / "google_ads_mcp" / ".env")
 
 class Settings(BaseSettings):
     # Base paths
-    BASE_DIR: Path = Path(__file__).resolve().parent
+    BASE_DIR: Path = BASE_DIR
     DATA_PATH: str = str(BASE_DIR / "data" / "marketing_campaign_dataset_corrected.csv")
     MODEL_PATH: str = str(BASE_DIR / "models/")
     
@@ -46,8 +53,9 @@ class Settings(BaseSettings):
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1/chat/completions"
     
     class Config:
-        env_file = ".env"
+        env_file = (".env", "google_ads_mcp/.env")
         case_sensitive = True
+        extra = "ignore"
 
     @field_validator("DEBUG", mode="before")
     @classmethod

@@ -39,6 +39,7 @@ export const api = {
   getSegments: () => request("/api/v1/segments"),
   getProductTypes: () => request("/api/v1/product-types"),
   getHistory: (token) => request("/api/v1/history", token),
+  getCampaignScaleupAnalysis: (token, campaignId) => request(`/api/v1/scaleup/campaign/${campaignId}/analysis`, token),
   createRecommendation: (token, payload) =>
     request("/api/v1/recommendations", token, {
       method: "POST",

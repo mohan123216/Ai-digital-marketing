@@ -167,6 +167,7 @@ class GoogleAdsLaunchRequest(BaseModel):
     customer_id: Optional[str] = None
     budget_resource_name: Optional[str] = None
     login_customer_id: Optional[str] = None
+    campaign_name: Optional[str] = None
     dry_run: bool = False
 
 
