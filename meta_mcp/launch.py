@@ -8,7 +8,6 @@ import re
 from typing import Any, Dict, List, Tuple
 
 from dotenv import load_dotenv
-import requests
 
 load_dotenv()
 
@@ -316,90 +315,7 @@ def _build_names(key: str, recommendation: Dict[str, Any]) -> Tuple[str, str]:
     return campaign_name, adset_name
 
 
-def _is_token_expired_error(exc: Exception) -> bool:
-    """Detect Meta token expiry/auth errors from SDK exceptions and fallback text."""
-    code_getter = getattr(exc, "api_error_code", None)
-    subcode_getter = getattr(exc, "api_error_subcode", None)
-
-    code = None
-    subcode = None
-    try:
-        if callable(code_getter):
-            code = code_getter()
-    except Exception:
-        pass
-    try:
-        if callable(subcode_getter):
-            subcode = subcode_getter()
-    except Exception:
-        pass
-
-    if code == 190:
-        return True
-    if subcode == 463:
-        return True
-
-    text = str(exc).lower()
-    return (
-        "error validating access token" in text
-        or '"code": 190' in text
-        or '"error_subcode": 463' in text
-        or "session has expired" in text
-    )
-
-
-def _update_access_token_in_env_file(new_token: str) -> None:
-    """Persist refreshed token to meta_mcp/.env so restarts keep using the new token."""
-    env_path = Path(__file__).resolve().parent / ".env"
-    if not env_path.exists():
-        return
-
-    try:
-        content = env_path.read_text(encoding="utf-8")
-        pattern = r"^META_ACCESS_TOKEN=.*$"
-        replacement = f"META_ACCESS_TOKEN={new_token}"
-        if re.search(pattern, content, flags=re.MULTILINE):
-            updated = re.sub(pattern, replacement, content, flags=re.MULTILINE)
-        else:
-            updated = content.rstrip("\n") + f"\n{replacement}\n"
-        env_path.write_text(updated, encoding="utf-8")
-    except Exception:
-        # Non-fatal: token is still updated in-memory for this process.
-        pass
-
-
-def _refresh_meta_access_token() -> str:
-    """Exchange current token for a fresh long-lived token."""
-    app_id = os.getenv("META_APP_ID")
-    app_secret = os.getenv("META_APP_SECRET")
-    current_token = os.getenv("META_ACCESS_TOKEN")
-    if not app_id or not app_secret or not current_token:
-        raise ValueError("Missing META_APP_ID, META_APP_SECRET, or META_ACCESS_TOKEN in environment.")
-
-    response = requests.get(
-        "https://graph.facebook.com/v25.0/oauth/access_token",
-        params={
-            "grant_type": "fb_exchange_token",
-            "client_id": app_id,
-            "client_secret": app_secret,
-            "fb_exchange_token": current_token,
-        },
-        timeout=30,
-    )
-    payload = response.json() if response.content else {}
-
-    if response.status_code != 200 or "access_token" not in payload:
-        err = payload.get("error", {}) if isinstance(payload, dict) else {}
-        message = err.get("message") or response.text
-        raise RuntimeError(f"Meta token refresh failed: {message}")
-
-    new_token = str(payload["access_token"])
-    os.environ["META_ACCESS_TOKEN"] = new_token
-    _update_access_token_in_env_file(new_token)
-    return new_token
-
-
-def _create_meta_assets_once(
+def _create_meta_assets(
     recommendation: Dict[str, Any],
     key: str,
     ad_account_id: str,
@@ -463,39 +379,6 @@ def _create_meta_assets_once(
         "optimization_goal": adset_params["optimization_goal"],
         "billing_event": adset_params["billing_event"],
     }
-
-
-def _create_meta_assets(
-    recommendation: Dict[str, Any],
-    key: str,
-    ad_account_id: str,
-    daily_budget_minor_units: int,
-) -> Dict[str, str]:
-    try:
-        return _create_meta_assets_once(
-            recommendation=recommendation,
-            key=key,
-            ad_account_id=ad_account_id,
-            daily_budget_minor_units=daily_budget_minor_units,
-        )
-    except Exception as exc:
-        if not _is_token_expired_error(exc):
-            raise
-
-        _refresh_meta_access_token()
-        try:
-            return _create_meta_assets_once(
-                recommendation=recommendation,
-                key=key,
-                ad_account_id=ad_account_id,
-                daily_budget_minor_units=daily_budget_minor_units,
-            )
-        except Exception as retry_exc:
-            if _is_token_expired_error(retry_exc):
-                raise RuntimeError(
-                    "Meta access token is expired and auto-refresh failed. Reconnect Meta and update META_ACCESS_TOKEN."
-                )
-            raise
 
 
 def launch_selected_recommendation(
