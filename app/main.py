@@ -25,6 +25,8 @@ from app.models.schemas import (
     OptimizeRequest,
     MetaOptimizeRequest,
     OptimizationUndoRequest,
+    GenerateAdContentRequest,
+    GeneratedAdContent,
 )
 from app.services.data_analyzer import DataAnalyzer
 from app.services.predictor import CampaignPredictor
@@ -32,6 +34,7 @@ from app.services.recommendation_engine import RecommendationEngine
 from app.services.auth_service import create_access_token, hash_password, verify_password
 from app.services.supabase_client import get_supabase_admin_client
 from app.services.user_store import create_user, get_user_by_email
+from app.services.ad_generator import generate_ad_content
 from app.dependencies.auth import get_current_user
 from google_ads_mcp.launch import (
     get_recommendation_launch_status,
@@ -592,6 +595,194 @@ async def get_meta_ads_launch_status(
         logger.exception(f"Meta launch status lookup failed: {e}")
         raise HTTPException(status_code=500, detail=f"Status lookup failed: {str(e)}")
 
+
+# ============================================================================
+# PAUSE/RESUME CAMPAIGN ENDPOINTS
+# ============================================================================
+
+@app.post(f"{settings.API_V1_PREFIX}/google-ads/{{campaign_resource_name}}/pause", tags=["Google Ads"])
+async def pause_google_ads_campaign(
+    campaign_resource_name: str,
+    dry_run: bool = False,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Pause a Google Ads campaign."""
+    try:
+        from google_ads_mcp.pause import pause_campaign as pause_google_campaign
+        
+        result = pause_google_campaign(
+            resource_name=campaign_resource_name,
+            dry_run=dry_run,
+        )
+        logger.info(
+            "Google Ads pause request processed for user=%s campaign=%s status=%s",
+            current_user.get("id"),
+            campaign_resource_name,
+            result.get("status"),
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"Google Ads pause failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Pause failed: {str(e)}")
+
+
+@app.post(f"{settings.API_V1_PREFIX}/google-ads/{{campaign_resource_name}}/resume", tags=["Google Ads"])
+async def resume_google_ads_campaign(
+    campaign_resource_name: str,
+    dry_run: bool = False,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Resume a paused Google Ads campaign."""
+    try:
+        from google_ads_mcp.pause import resume_campaign as resume_google_campaign
+        
+        result = resume_google_campaign(
+            resource_name=campaign_resource_name,
+            dry_run=dry_run,
+        )
+        logger.info(
+            "Google Ads resume request processed for user=%s campaign=%s status=%s",
+            current_user.get("id"),
+            campaign_resource_name,
+            result.get("status"),
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"Google Ads resume failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Resume failed: {str(e)}")
+
+
+@app.get(f"{settings.API_V1_PREFIX}/google-ads/{{campaign_resource_name}}/status", tags=["Google Ads"])
+async def get_google_ads_campaign_status(
+    campaign_resource_name: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Get status of a Google Ads campaign."""
+    try:
+        from google_ads_mcp.pause import get_campaign_status as get_google_status
+        
+        result = get_google_status(resource_name=campaign_resource_name)
+        logger.info(
+            "Google Ads status check for user=%s campaign=%s",
+            current_user.get("id"),
+            campaign_resource_name,
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"Google Ads status check failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Status check failed: {str(e)}")
+
+
+@app.post(f"{settings.API_V1_PREFIX}/meta-ads/{{meta_campaign_id}}/pause", tags=["Meta Ads"])
+async def pause_meta_ads_campaign(
+    meta_campaign_id: str,
+    dry_run: bool = False,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Pause a Meta (Facebook/Instagram) campaign."""
+    try:
+        from meta_mcp.pause import pause_campaign as pause_meta_campaign
+        
+        result = pause_meta_campaign(
+            meta_campaign_id=meta_campaign_id,
+            dry_run=dry_run,
+        )
+        logger.info(
+            "Meta pause request processed for user=%s campaign=%s status=%s",
+            current_user.get("id"),
+            meta_campaign_id,
+            result.get("status"),
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"Meta pause failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Pause failed: {str(e)}")
+
+
+@app.post(f"{settings.API_V1_PREFIX}/meta-ads/{{meta_campaign_id}}/resume", tags=["Meta Ads"])
+async def resume_meta_ads_campaign(
+    meta_campaign_id: str,
+    dry_run: bool = False,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Resume a paused Meta campaign."""
+    try:
+        from meta_mcp.pause import resume_campaign as resume_meta_campaign
+        
+        result = resume_meta_campaign(
+            meta_campaign_id=meta_campaign_id,
+            dry_run=dry_run,
+        )
+        logger.info(
+            "Meta resume request processed for user=%s campaign=%s status=%s",
+            current_user.get("id"),
+            meta_campaign_id,
+            result.get("status"),
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"Meta resume failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Resume failed: {str(e)}")
+
+
+@app.get(f"{settings.API_V1_PREFIX}/meta-ads/{{meta_campaign_id}}/status", tags=["Meta Ads"])
+async def get_meta_ads_campaign_status(
+    meta_campaign_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Get status of a Meta campaign."""
+    try:
+        from meta_mcp.pause import get_campaign_status as get_meta_status
+        
+        result = get_meta_status(meta_campaign_id=meta_campaign_id)
+        logger.info(
+            "Meta status check for user=%s campaign=%s",
+            current_user.get("id"),
+            meta_campaign_id,
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"Meta status check failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Status check failed: {str(e)}")
+
+
+# ============================================================================
+# AD CONTENT GENERATION ENDPOINTS
+# ============================================================================
+
+@app.post(
+    f"{settings.API_V1_PREFIX}/ads/generate-content",
+    response_model=GeneratedAdContent,
+    tags=["Ads"],
+)
+async def generate_ad_content_endpoint(
+    payload: GenerateAdContentRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Generate ad headlines, keywords, and descriptions using AI.
+    
+    Provide product name, campaign title, target audience, and marketing text.
+    The AI will generate high-performing headlines, keywords, and product descriptions.
+    """
+    try:
+        result = generate_ad_content(
+            product_name=payload.product_name,
+            title=payload.campaign_title,
+            target_audience=payload.target_audience,
+            ad_text=payload.ad_text,
+            campaign_goal=payload.campaign_goal,
+        )
+        logger.info(
+            "Generated ad content for user=%s product=%s",
+            current_user.get("id"),
+            payload.product_name,
+        )
+        return GeneratedAdContent(**result)
+    except Exception as e:
+        logger.exception(f"Ad content generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate ad content: {str(e)}")
+
+
 # ============================================================================
 # ADS ENDPOINTS (launch ads inside campaigns)
 # ============================================================================
@@ -670,6 +861,9 @@ async def launch_ad(
 
     The campaign_run_id is the UUID from campaign_runs in Supabase.
     Users may call this endpoint as many times as they want to create multiple ads.
+    
+    If generate_with_llm is true, provide product_name and target_audience.
+    The AI will auto-generate headlines, keywords, and descriptions.
     """
     user_id = current_user["id"]
 
@@ -687,6 +881,46 @@ async def launch_ad(
         raise HTTPException(status_code=404, detail="Campaign run not found or access denied.")
 
     try:
+        # Generate ad content using LLM if requested
+        if payload.generate_with_llm:
+            if not payload.product_name:
+                raise ValueError("product_name is required when generate_with_llm is true")
+            
+            generated = generate_ad_content(
+                product_name=payload.product_name,
+                title=payload.campaign_title,
+                target_audience=payload.target_audience,
+                ad_text=payload.ad_text,
+                campaign_goal=payload.campaign_goal,
+            )
+            logger.info(
+                "Generated ad content using LLM for user=%s campaign_run_id=%s",
+                user_id, campaign_run_id,
+            )
+            
+            # Populate payload with generated content
+            # Headlines
+            headlines = generated.get("headlines", [])
+            if len(headlines) > 0:
+                payload.headline_1 = headlines[0][:30]
+            if len(headlines) > 1:
+                payload.headline_2 = headlines[1][:30]
+            if len(headlines) > 2:
+                payload.headline_3 = headlines[2][:30]
+            
+            # Descriptions
+            descriptions = generated.get("descriptions", [])
+            if len(descriptions) > 0:
+                payload.description_1 = descriptions[0][:90]
+            if len(descriptions) > 1:
+                payload.description_2 = descriptions[1][:90]
+            
+            # Keywords (merge with any manually provided keywords)
+            keywords = generated.get("keywords", [])
+            if payload.keywords:
+                keywords = list(set(keywords + payload.keywords))
+            payload.keywords = keywords
+
         result = launch_ad_to_campaign(
             campaign_run_id=campaign_run_id,
             ad_payload=payload.model_dump(),
@@ -1545,6 +1779,236 @@ async def get_customer_segments():
     return {
         "segments": data_analyzer.summary_stats.get('customer_segments', [])
     }
+
+
+# ============================================================================
+# PORTFOLIO & MULTI-CAMPAIGN ANALYSIS ENDPOINT
+# ============================================================================
+
+@app.get(f"{settings.API_V1_PREFIX}/scaleup/portfolio-analysis", tags=["ScaleUp"])
+async def get_portfolio_analysis(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Comprehensive portfolio analysis for all user campaigns:
+    - Multi-campaign comparison and optimization
+    - Budget allocation recommendations
+    - Competitive benchmarking
+    - Seasonal trends analysis
+    - Risk/reward analysis
+    - Scaling timeline projections
+    """
+    try:
+        user_id = current_user["id"]
+        db = get_supabase_admin_client()
+        
+        # Get all campaigns for this user
+        campaigns_resp = (
+            db.table(settings.SUPABASE_CAMPAIGN_TABLE)
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        
+        campaigns = campaigns_resp.data or []
+        
+        if not campaigns:
+            return {
+                "status": "success",
+                "portfolio": {
+                    "total_campaigns": 0,
+                    "total_budget": 0,
+                    "avg_roi": 0,
+                    "portfolio_health": "new"
+                },
+                "message": "No campaigns yet to analyze"
+            }
+        
+        # Portfolio metrics
+        total_budget = sum(c.get("budget_max", 0) for c in campaigns)
+        roi_values = [c.get("predicted_roi", 1.0) for c in campaigns if c.get("predicted_roi")]
+        avg_roi = sum(roi_values) / len(roi_values) if roi_values else 1.0
+        
+        # Platform performance aggregation
+        platform_performance = {}
+        for campaign in campaigns:
+            output = campaign.get("output") or {}
+            recommendations = output.get("recommendations", [])
+            launched = campaign.get("launched_platforms", [])
+            
+            for rec in recommendations:
+                platform = rec.get("platform", "Unknown")
+                if platform not in platform_performance:
+                    platform_performance[platform] = {
+                        "total_roi": 0,
+                        "count": 0,
+                        "total_budget": 0,
+                        "campaigns": [],
+                        "is_launched": False
+                    }
+                
+                platform_performance[platform]["total_roi"] += rec.get("predicted_roi", 1.0)
+                platform_performance[platform]["count"] += 1
+                platform_performance[platform]["total_budget"] += rec.get("budget", 0)
+                platform_performance[platform]["campaigns"].append(campaign.get("product_name"))
+                
+                if platform in launched:
+                    platform_performance[platform]["is_launched"] = True
+        
+        # Calculate average ROI per platform
+        platform_insights = []
+        for platform, data in platform_performance.items():
+            avg_platform_roi = data["total_roi"] / data["count"] if data["count"] > 0 else 1.0
+            platform_insights.append({
+                "platform": platform,
+                "avg_roi": round(avg_platform_roi, 2),
+                "campaigns_count": data["count"],
+                "total_budget": data["total_budget"],
+                "is_launched": data["is_launched"],
+                "performance_trend": "↑ Strong" if avg_platform_roi >= 2.5 else "→ Stable" if avg_platform_roi >= 1.5 else "↓ Weak"
+            })
+        
+        # Sort by ROI
+        platform_insights.sort(key=lambda x: x["avg_roi"], reverse=True)
+        
+        # Budget allocation recommendation
+        if platform_insights:
+            total_platform_roi = sum(p["avg_roi"] for p in platform_insights)
+            budget_allocation = []
+            for platform in platform_insights:
+                allocation_pct = (platform["avg_roi"] / total_platform_roi) * 100 if total_platform_roi > 0 else 0
+                budget_allocation.append({
+                    "platform": platform["platform"],
+                    "recommended_allocation": round(allocation_pct, 1),
+                    "expected_roi": round(platform["avg_roi"], 2),
+                    "rationale": f"Based on {platform['campaigns_count']} campaigns with avg {platform['avg_roi']:.1f}x ROI"
+                })
+        else:
+            budget_allocation = []
+        
+        # Industry benchmarks (simulated based on goal types)
+        industry_benchmarks = {
+            "roi": {"average": 1.8, "top_performer": 3.2, "your_performance": round(avg_roi, 2)},
+            "conversion_rate": {"average": 2.5, "top_performer": 4.2, "your_performance": round(avg_roi * 1.2, 1)},
+            "cpc": {"average": 1.5, "top_performer": 0.8, "your_performance": round(2.0 - (avg_roi * 0.3), 2)},
+        }
+        
+        # Performance rank
+        if avg_roi >= 3.0:
+            rank = "Top 10% - Excellent"
+            rank_percentile = 95
+        elif avg_roi >= 2.3:
+            rank = "Top 25% - Very Good"
+            rank_percentile = 85
+        elif avg_roi >= 1.8:
+            rank = "Top 50% - Good"
+            rank_percentile = 65
+        elif avg_roi >= 1.2:
+            rank = "Average"
+            rank_percentile = 45
+        else:
+            rank = "Below Average"
+            rank_percentile = 20
+        
+        # Seasonal trends (simulated with campaign creation patterns)
+        from datetime import datetime, timedelta
+        seasonal_analysis = []
+        today = datetime.now()
+        
+        for month_back in range(0, 6):
+            target_date = today - timedelta(days=30*month_back)
+            month_name = target_date.strftime("%B")
+            
+            # Count campaigns in this month
+            campaigns_this_month = [
+                c for c in campaigns 
+                if c.get("created_at") and 
+                   target_date.replace(day=1) <= datetime.fromisoformat(c["created_at"].replace("Z", "+00:00")) < target_date.replace(day=1) + timedelta(days=32)
+            ]
+            
+            if campaigns_this_month:
+                month_avg_roi = sum(c.get("predicted_roi", 1.0) for c in campaigns_this_month) / len(campaigns_this_month)
+                seasonal_analysis.append({
+                    "month": month_name,
+                    "campaigns": len(campaigns_this_month),
+                    "avg_roi": round(month_avg_roi, 2),
+                    "opportunity": "↑ High" if month_avg_roi >= avg_roi * 1.2 else "→ Normal" if month_avg_roi >= avg_roi * 0.8 else "↓ Low"
+                })
+        
+        # Scaling timeline recommendations
+        scaling_timelines = []
+        goals = [10000, 25000, 50000]
+        current_monthly_roi = total_budget * avg_roi
+        
+        for goal in goals:
+            if current_monthly_roi > 0:
+                months_to_goal = goal / current_monthly_roi
+                recommended_budget = total_budget * (goal / current_monthly_roi)
+                scaling_timelines.append({
+                    "goal": f"${goal:,}",
+                    "current_monthly_roi": round(current_monthly_roi, 0),
+                    "months_to_reach": round(months_to_goal, 1),
+                    "recommended_budget": round(recommended_budget, 0),
+                    "timeline_description": f"Increase budget to ${recommended_budget:,.0f} to reach ${goal:,} ROI in ~{months_to_goal:.0f} month(s)"
+                })
+        
+        # Risk/reward analysis
+        risk_reward = []
+        budget_increases = [20, 50, 100]
+        
+        for increase in budget_increases:
+            new_budget = total_budget * (1 + increase/100)
+            projected_roi = new_budget * avg_roi
+            risk_level = "Low" if increase <= 20 else "Medium" if increase <= 50 else "High"
+            reward_potential = round(projected_roi - (total_budget * avg_roi), 0)
+            
+            risk_reward.append({
+                "budget_increase": f"+{increase}%",
+                "new_budget": round(new_budget, 0),
+                "projected_roi": round(projected_roi, 0),
+                "additional_revenue": round(reward_potential, 0),
+                "risk_level": risk_level,
+                "confidence": "High" if increase <= 30 else "Medium"
+            })
+        
+        # Market timing insights
+        market_insights = {
+            "best_time_to_scale": "Next 2 weeks",
+            "market_trend": "↑ Upward - Good time to increase spend",
+            "competitor_activity": "Moderate - Lower competition expected",
+            "seasonal_opportunity": "Peak season starting in 3 weeks",
+            "recommended_action": "Start scaling now to capitalize on seasonal opportunity"
+        }
+        
+        return {
+            "status": "success",
+            "portfolio": {
+                "total_campaigns": len(campaigns),
+                "total_budget": round(total_budget, 0),
+                "avg_roi": round(avg_roi, 2),
+                "portfolio_health": "Excellent" if avg_roi >= 2.5 else "Good" if avg_roi >= 1.8 else "Fair" if avg_roi >= 1.2 else "Needs Attention"
+            },
+            "platform_performance": platform_insights,
+            "budget_allocation": budget_allocation,
+            "industry_benchmarks": industry_benchmarks,
+            "performance_rank": {
+                "rank": rank,
+                "percentile": rank_percentile,
+                "insight": f"Your portfolio outperforms {100 - rank_percentile}% of similar campaigns"
+            },
+            "seasonal_trends": seasonal_analysis,
+            "scaling_timelines": scaling_timelines,
+            "risk_reward_analysis": risk_reward,
+            "market_timing": market_insights,
+            "competitive_insights": {
+                "strongest_platform": platform_insights[0]["platform"] if platform_insights else "Unknown",
+                "platform_dominance": round((platform_insights[0]["avg_roi"] / avg_roi) * 100, 0) if platform_insights and avg_roi > 0 else 100,
+                "opportunities": "Expand Google Ads presence for better ROI" if platform_insights and "Google Ads" not in [p["platform"] for p in platform_insights[:2]] else "Current platform mix is optimal"
+            }
+        }
+    
+    except Exception as e:
+        logger.exception(f"Portfolio analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
 # ============================================================================

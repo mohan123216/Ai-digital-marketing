@@ -1011,34 +1011,94 @@ def build_launch_payload_from_file(payload_file: str, index: int = 0) -> Dict[st
 
 
 def _main() -> None:
-    parser = argparse.ArgumentParser(description="Launch selected Google Ads recommendation once.")
-    parser.add_argument("--payload-file", type=str, help="Path to recommendation API response JSON file")
-    parser.add_argument("--index", type=int, default=0, help="Recommendation index to launch")
-    parser.add_argument("--campaign-id", type=str, help="Campaign ID when passing recommendation JSON directly")
-    parser.add_argument("--dry-run", action="store_true", help="Simulate launch without Google Ads API call")
-    parser.add_argument(
+    parser = argparse.ArgumentParser(description="Google Ads campaign management (launch, pause, resume).")
+    subparsers = parser.add_subparsers(dest="command", help="Command to execute")
+
+    # Launch command
+    launch_parser = subparsers.add_parser("launch", help="Launch a new campaign")
+    launch_parser.add_argument("--payload-file", type=str, help="Path to recommendation API response JSON file")
+    launch_parser.add_argument("--index", type=int, default=0, help="Recommendation index to launch")
+    launch_parser.add_argument("--campaign-id", type=str, help="Campaign ID when passing recommendation JSON directly")
+    launch_parser.add_argument("--dry-run", action="store_true", help="Simulate launch without Google Ads API call")
+    launch_parser.add_argument(
         "--recommendation-json",
         type=str,
         help="Single recommendation JSON string (must include platform, target fields, budget, predictions)",
     )
+
+    # Pause command
+    pause_parser = subparsers.add_parser("pause", help="Pause a campaign")
+    pause_parser.add_argument("--resource-name", type=str, required=True, help="Campaign resource name")
+    pause_parser.add_argument("--dry-run", action="store_true", help="Simulate pause without API call")
+
+    # Resume command
+    resume_parser = subparsers.add_parser("resume", help="Resume a paused campaign")
+    resume_parser.add_argument("--resource-name", type=str, required=True, help="Campaign resource name")
+    resume_parser.add_argument("--dry-run", action="store_true", help="Simulate resume without API call")
+
+    # Status command
+    status_parser = subparsers.add_parser("status", help="Get campaign status")
+    status_parser.add_argument("--resource-name", type=str, required=True, help="Campaign resource name")
+
     args = parser.parse_args()
 
-    if args.payload_file:
-        payload = build_launch_payload_from_file(args.payload_file, args.index)
-    elif args.recommendation_json and args.campaign_id:
-        payload = {
-            "campaign_id": args.campaign_id,
-            "recommendation": json.loads(args.recommendation_json),
-        }
-    else:
-        raise ValueError("Provide either --payload-file OR both --campaign-id and --recommendation-json")
+    if args.command == "launch":
+        if args.payload_file:
+            payload = build_launch_payload_from_file(args.payload_file, args.index)
+        elif args.recommendation_json and args.campaign_id:
+            payload = {
+                "campaign_id": args.campaign_id,
+                "recommendation": json.loads(args.recommendation_json),
+            }
+        else:
+            raise ValueError("Provide either --payload-file OR both --campaign-id and --recommendation-json")
 
-    result = launch_selected_recommendation(
-        campaign_id=payload["campaign_id"],
-        recommendation=payload["recommendation"],
-        dry_run=args.dry_run,
-    )
-    print(json.dumps(result, indent=2))
+        result = launch_selected_recommendation(
+            campaign_id=payload["campaign_id"],
+            recommendation=payload["recommendation"],
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "pause":
+        from google_ads_mcp.pause import pause_campaign
+        result = pause_campaign(
+            resource_name=args.resource_name,
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "resume":
+        from google_ads_mcp.pause import resume_campaign
+        result = resume_campaign(
+            resource_name=args.resource_name,
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "status":
+        from google_ads_mcp.pause import get_campaign_status
+        result = get_campaign_status(resource_name=args.resource_name)
+        print(json.dumps(result, indent=2))
+
+    else:
+        # Default to launch for backward compatibility
+        if args.payload_file:
+            payload = build_launch_payload_from_file(args.payload_file, args.index)
+        elif args.recommendation_json and args.campaign_id:
+            payload = {
+                "campaign_id": args.campaign_id,
+                "recommendation": json.loads(args.recommendation_json),
+            }
+        else:
+            raise ValueError("Provide either --payload-file OR both --campaign-id and --recommendation-json")
+
+        result = launch_selected_recommendation(
+            campaign_id=payload["campaign_id"],
+            recommendation=payload["recommendation"],
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

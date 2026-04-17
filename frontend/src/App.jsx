@@ -21,7 +21,7 @@ function LandingPage({ onLogin, onSignup }) {
   return (
     <div className="landing">
       <nav className="landing-nav">
-        <div className="landing-logo"><span className="logo-icon">⚡</span>NexusAds</div>
+        <div className="landing-logo"><span className="logo-icon">🚀</span>Smart Ads</div>
         <div className="landing-nav-actions">
           <button className="ghost nav-btn" onClick={onLogin}>Sign In</button>
           <button className="btn-primary nav-btn" onClick={onSignup}>Get Started</button>
@@ -64,7 +64,7 @@ function LandingPage({ onLogin, onSignup }) {
         ))}
       </section>
       <div className="landing-footer">
-        <p>© 2025 NexusAds — AI Digital Marketing Agent</p>
+        <p>© 2025 Smart Ads — AI Digital Marketing Agent</p>
         <button className="btn-hero-primary" onClick={onSignup} style={{ marginTop: "1.5rem" }}>Get Started Free →</button>
       </div>
     </div>
@@ -89,7 +89,7 @@ function AuthPage({ mode, onSuccess, onSwitch, onBack }) {
     <div className="auth-page">
       <button className="ghost back-btn" onClick={onBack}>← Back to Home</button>
       <div className="auth-card">
-        <div className="auth-card-logo"><span className="logo-icon">⚡</span><span>NexusAds</span></div>
+        <div className="auth-card-logo"><span className="logo-icon">🚀</span><span>Smart Ads</span></div>
         <h2>{mode === "login" ? "Welcome back" : "Create your account"}</h2>
         <p className="subtext" style={{ marginBottom: "1.5rem" }}>{mode === "login" ? "Sign in to your dashboard" : "Start launching AI-powered campaigns"}</p>
         <form onSubmit={submit} className="stack">
@@ -144,6 +144,12 @@ export default function App() {
   const [scaleupData, setScaleupData] = useState(null);
   const [scaleupLoading, setScaleupLoading] = useState(false);
   const [scaleupError, setScaleupError] = useState("");
+  const [portfolioData, setPortfolioData] = useState(null);
+  const [portfolioLoading, setPortfolioLoading] = useState(false);
+  const [portfolioTab, setPortfolioTab] = useState("overview");
+  const [pausingCampaigns, setPausingCampaigns] = useState({});
+  const [pauseModal, setPauseModal] = useState({ open: false, campaignId: null, platform: null, status: "idle", message: "", error: "" });
+  const [campaignStatuses, setCampaignStatuses] = useState({});
 
   useEffect(() => {
     api.getSegments().then(r => setSegments(r.segments || [])).catch(() => {});
@@ -184,6 +190,66 @@ export default function App() {
       setMetricsModal(p => ({ ...p, data: m, loading: false }));
     }
     catch (err) { setMetricsModal(p => ({ ...p, error: err.message || "Failed.", loading: false })); }
+  };
+
+  const handlePauseCampaign = async (e, campaignItem, platform) => {
+    e.stopPropagation();
+    if (!campaignItem.meta_assets && platform !== "Google Ads") return;
+    
+    setPauseModal({ open: true, campaignId: campaignItem.id, platform, status: "pausing", message: "", error: "" });
+    setPausingCampaigns(p => ({ ...p, [campaignItem.id]: true }));
+    
+    try {
+      let result;
+      if (platform === "Google Ads") {
+        const gaKey = [...(campaignItem.output?.recommendations || [])].find(r => r.platform === "Google Ads");
+        if (!gaKey) throw new Error("No Google Ads resource found");
+        result = await api.pauseGoogleAdsCampaign(accessToken, gaKey.resource_name || gaKey.id);
+      } else {
+        const metaAssets = campaignItem.meta_assets || {};
+        const platformData = metaAssets[platform];
+        if (!platformData?.meta_campaign_id) throw new Error("No Meta campaign ID found");
+        result = await api.pauseMetaAdsCampaign(accessToken, platformData.meta_campaign_id);
+      }
+      setPauseModal(p => ({ ...p, status: "paused", message: `${platform} campaign paused successfully`, error: "" }));
+      setTimeout(() => {
+        setPauseModal(p => ({ ...p, open: false }));
+        window.location.reload();
+      }, 2000);
+    } catch (err) {
+      setPauseModal(p => ({ ...p, status: "error", error: err.message || "Failed to pause campaign" }));
+      setTimeout(() => setPausingCampaigns(p => ({ ...p, [campaignItem.id]: false })), 1500);
+    }
+  };
+
+  const handleResumeCampaign = async (e, campaignItem, platform) => {
+    e.stopPropagation();
+    if (!campaignItem.meta_assets && platform !== "Google Ads") return;
+    
+    setPauseModal({ open: true, campaignId: campaignItem.id, platform, status: "resuming", message: "", error: "" });
+    setPausingCampaigns(p => ({ ...p, [campaignItem.id]: true }));
+    
+    try {
+      let result;
+      if (platform === "Google Ads") {
+        const gaKey = [...(campaignItem.output?.recommendations || [])].find(r => r.platform === "Google Ads");
+        if (!gaKey) throw new Error("No Google Ads resource found");
+        result = await api.resumeGoogleAdsCampaign(accessToken, gaKey.resource_name || gaKey.id);
+      } else {
+        const metaAssets = campaignItem.meta_assets || {};
+        const platformData = metaAssets[platform];
+        if (!platformData?.meta_campaign_id) throw new Error("No Meta campaign ID found");
+        result = await api.resumeMetaAdsCampaign(accessToken, platformData.meta_campaign_id);
+      }
+      setPauseModal(p => ({ ...p, status: "resumed", message: `${platform} campaign resumed successfully`, error: "" }));
+      setTimeout(() => {
+        setPauseModal(p => ({ ...p, open: false }));
+        window.location.reload();
+      }, 2000);
+    } catch (err) {
+      setPauseModal(p => ({ ...p, status: "error", error: err.message || "Failed to resume campaign" }));
+      setTimeout(() => setPausingCampaigns(p => ({ ...p, [campaignItem.id]: false })), 1500);
+    }
   };
 
   const loadHistoryItem = (item) => {
@@ -484,9 +550,50 @@ export default function App() {
         </div>
       )}
 
+      {/* Pause Campaign Modal */}
+      {pauseModal.open && (
+        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget && pauseModal.status !== "pausing" && pauseModal.status !== "resuming") setPauseModal({ open: false, campaignId: null, platform: null, status: "idle", message: "", error: "" }); }}>
+          <div className="modal-content" style={{ maxWidth: 400, textAlign: "center" }}>
+            <div style={{ padding: "2rem" }}>
+              {(pauseModal.status === "pausing" || pauseModal.status === "resuming") && (
+                <>
+                  <div style={{ marginBottom: "1.5rem" }}>
+                    <div className="spinner-wrapper" style={{ margin: "0 auto" }}><div className="spinner" /><div className="spinner-inner" /></div>
+                  </div>
+                  <h3 style={{ marginTop: "1.5rem" }}>{pauseModal.status === "pausing" ? "Pausing Campaign..." : "Resuming Campaign..."}</h3>
+                  <p className="subtext">{pauseModal.platform} campaign</p>
+                </>
+              )}
+              {pauseModal.status === "paused" && (
+                <>
+                  <p style={{ fontSize: "3rem", marginBottom: "0.5rem" }}>⏸️</p>
+                  <h3>Campaign Paused</h3>
+                  <p className="subtext">{pauseModal.message}</p>
+                </>
+              )}
+              {pauseModal.status === "resumed" && (
+                <>
+                  <p style={{ fontSize: "3rem", marginBottom: "0.5rem" }}>▶️</p>
+                  <h3>Campaign Resumed</h3>
+                  <p className="subtext">{pauseModal.message}</p>
+                </>
+              )}
+              {pauseModal.status === "error" && (
+                <>
+                  <p style={{ fontSize: "3rem", marginBottom: "0.5rem", color: "#ef4444" }}>⚠️</p>
+                  <h3 style={{ color: "#ef4444" }}>Error</h3>
+                  <p className="alert">{pauseModal.error}</p>
+                  <button className="btn-primary" style={{ marginTop: "1rem" }} onClick={() => setPauseModal({ open: false, campaignId: null, platform: null, status: "idle", message: "", error: "" })}>Close</button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar */}
       <aside className="sidebar">
-        <div className="sidebar-logo"><span className="logo-icon">⚡</span><span>NexusAds</span></div>
+        <div className="sidebar-logo"><span className="logo-icon">🚀</span><span>Smart Ads</span></div>
         <nav className="sidebar-nav">
           {navItems.map(n => (<button key={n.id} className={`nav-link${dashTab === n.id ? " active" : ""}`} onClick={() => setDashTab(n.id)}><span className="nav-icon">{n.icon}</span><span>{n.label}</span></button>))}
         </nav>
@@ -497,8 +604,26 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Main content */}
-      <main className="dash-main">
+      {/* Dashboard Wrapper */}
+      <div className="dashboard-wrapper">
+        {/* Professional Header */}
+        <header className="app-header">
+          <div className="header-content">
+            <div className="header-left">
+              <div className="header-brand"><span className="header-logo">🚀</span><span className="header-title">Smart Ads Dashboard</span></div>
+              <p className="header-subtitle">AI-Powered Marketing Automation</p>
+            </div>
+            <div className="header-right">
+              <div className="header-user-info">
+                <span className="header-greeting">Welcome, {user?.email?.split("@")[0] || "User"}</span>
+                <span className="header-status">✓ Connected</span>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* Main content */}
+        <main className="dash-main">
         {/* Overview */}
         {dashTab === "overview" && (
           <div className="dash-section">
@@ -513,13 +638,16 @@ export default function App() {
               {history.length === 0 ? <p className="subtext">No campaigns yet. <button className="link-btn" onClick={() => setDashTab("plan")}>Plan your first →</button></p> : (
                 <div className="campaign-list">
                   {history.slice(0, 5).map(item => (
-                    <div key={item.id} className="campaign-row" onClick={() => loadHistoryItem(item)}>
-                      <div className="cr-left"><strong>{item.product_name}</strong><span className="cr-goal">{item.campaign_goal}</span></div>
-                      <div className="cr-mid"><span className="cr-roi">{item.predicted_roi ? `${item.predicted_roi}x ROI` : "—"}</span></div>
-                      <div className="cr-right">
-                        {(item.launched_platforms || []).length > 0 ? (item.launched_platforms || []).map(p => <span key={p} className="platform-chip">{p}</span>) : <span className="chip-pending">Not launched</span>}
-                        <span className="cr-date">{fmt(item.created_at)}</span>
+                    <div key={item.id} className="campaign-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
+                      <div onClick={() => loadHistoryItem(item)} style={{ flex: 1, cursor: "pointer", display: "flex", justifyContent: "space-between" }}>
+                        <div className="cr-left"><strong>{item.product_name}</strong><span className="cr-goal">{item.campaign_goal}</span></div>
+                        <div className="cr-mid"><span className="cr-roi">{item.predicted_roi ? `${item.predicted_roi}x ROI` : "—"}</span></div>
+                        <div className="cr-right">
+                          {(item.launched_platforms || []).length > 0 ? (item.launched_platforms || []).map(p => <span key={p} className="platform-chip">{p}</span>) : <span className="chip-pending">Not launched</span>}
+                          <span className="cr-date">{fmt(item.created_at)}</span>
+                        </div>
                       </div>
+
                     </div>
                   ))}
                 </div>
@@ -580,6 +708,7 @@ export default function App() {
                                           📈
                                         </button>
                                       )}
+
                                     </>
                                   ) : (
                                     <button className="btn-launch" style={{ padding: "0.5rem 1rem", fontSize: "0.82rem" }}
@@ -665,10 +794,12 @@ export default function App() {
                 <h2>Campaign History</h2>
                 <div className="history-list">
                   {history.map(item => (
-                    <article key={item.id} className="history-item" style={{ cursor: "pointer" }} onClick={() => loadHistoryItem(item)}>
-                      <div className="header"><h3>{item.product_name}</h3><span className="date">{fmt(item.created_at)}</span></div>
-                      <div className="details"><p style={{ color: "var(--brand)" }}>{item.campaign_goal}</p><p style={{ color: "#10b981", fontWeight: 600 }}>{item.predicted_roi ? `${item.predicted_roi}x ROI` : "—"}</p></div>
-                      {(item.launched_platforms || []).length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.25rem" }}>{item.launched_platforms.map(p => <span key={p} className="platform-chip">{p}</span>)}</div>}
+                    <article key={item.id} className="history-item" style={{ cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" }}>
+                      <div style={{ flex: 1 }} onClick={() => loadHistoryItem(item)}>
+                        <div className="header"><h3>{item.product_name}</h3><span className="date">{fmt(item.created_at)}</span></div>
+                        <div className="details"><p style={{ color: "var(--brand)" }}>{item.campaign_goal}</p><p style={{ color: "#10b981", fontWeight: 600 }}>{item.predicted_roi ? `${item.predicted_roi}x ROI` : "—"}</p></div>
+                        {(item.launched_platforms || []).length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.25rem" }}>{item.launched_platforms.map(p => <span key={p} className="platform-chip">{p}</span>)}</div>}
+                      </div>
                     </article>
                   ))}
                 </div>
@@ -700,17 +831,34 @@ export default function App() {
                   <div className="card" style={{ marginBottom: "1.5rem" }}>
                     <h2>Select Campaign</h2>
                     <div className="campaign-list">
-                      {metricsRows.map(row => (
-                        <div
-                          key={`${row.id}::${row.platform}`}
-                          className={`campaign-row${selectedMetricsItem?.id === row.id && selectedMetricsItem?.platform === row.platform ? " selected" : ""}`}
-                          onClick={() => setSelectedMetricsItem({ id: row.id, platform: row.platform })}
-                          style={{ cursor: "pointer" }}
-                        >
-                          <div className="cr-left"><strong>{row.product_name}</strong><span className="cr-goal">{row.campaign_goal}</span></div>
-                          <div className="cr-right"><span className="platform-chip">{row.platform}</span><span className="cr-date">{fmt(row.created_at)}</span></div>
-                        </div>
-                      ))}
+                      {metricsRows.map(row => {
+                        const campaignItem = history.find(h => h.id === row.id);
+                        return (
+                          <div
+                            key={`${row.id}::${row.platform}`}
+                            className={`campaign-row${selectedMetricsItem?.id === row.id && selectedMetricsItem?.platform === row.platform ? " selected" : ""}`}
+                            style={{ cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}
+                          >
+                            <div
+                              onClick={() => setSelectedMetricsItem({ id: row.id, platform: row.platform })}
+                              style={{ flex: 1, display: "flex", justifyContent: "space-between" }}
+                            >
+                              <div className="cr-left"><strong>{row.product_name}</strong><span className="cr-goal">{row.campaign_goal}</span></div>
+                              <div className="cr-right"><span className="platform-chip">{row.platform}</span><span className="cr-date">{fmt(row.created_at)}</span></div>
+                            </div>
+                            {campaignItem && (
+                              <button
+                                className="btn-pause"
+                                onClick={(e) => handlePauseCampaign(e, campaignItem, row.platform)}
+                                disabled={pausingCampaigns[campaignItem.id]}
+                                style={{ flexShrink: 0 }}
+                              >
+                                {pausingCampaigns[campaignItem.id] ? "⏳" : "⏸️"}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                     {selectedMetricsItem && <button style={{ marginTop: "1rem" }} onClick={() => handleViewMetrics(selectedMetricsItem.id, selectedMetricsItem.platform)}>📈 Load Metrics</button>}
                   </div>
@@ -1051,12 +1199,272 @@ export default function App() {
           <div className="dash-section">
             <div className="dash-page-header">
               <h1>📈 Scale Up Your Campaigns</h1>
-              <p className="subtext">Select a campaign to analyze scaling opportunities</p>
+              <p className="subtext">AI-powered portfolio analysis, budget optimization, and scaling recommendations</p>
             </div>
             {history.length === 0 ? (
               <div className="empty-state"><p>📊</p><h3>No campaigns yet</h3><p className="subtext">Create and launch campaigns to see scaling recommendations.</p><button className="btn-primary" onClick={() => setDashTab("plan")}>Plan Your First Campaign</button></div>
             ) : (
               <div className="scaleup-analysis">
+                {/* Portfolio Overview Tab */}
+                <div className="card" style={{ marginBottom: "1.5rem" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
+                    <h2>📊 Portfolio Overview</h2>
+                    <button className="btn-primary" disabled={portfolioLoading} onClick={async () => {
+                      setPortfolioLoading(true);
+                      try { 
+                        const data = await api.getPortfolioAnalysis(accessToken); 
+                        setPortfolioData(data); 
+                      }
+                      catch (err) { console.error(err); }
+                      finally { setPortfolioLoading(false); }
+                    }} style={{ fontSize: "0.85rem", padding: "0.5rem 1rem" }}>
+                      {portfolioLoading ? "⏳ Analyzing..." : "🔄 Refresh Analysis"}
+                    </button>
+                  </div>
+
+                  {portfolioData && (
+                    <>
+                      {/* Portfolio Stats */}
+                      <div className="portfolio-stats-grid">
+                        <div className="portfolio-stat-card">
+                          <span className="stat-label">Total Campaigns</span>
+                          <strong className="stat-value">{portfolioData.portfolio.total_campaigns}</strong>
+                        </div>
+                        <div className="portfolio-stat-card">
+                          <span className="stat-label">Combined Budget</span>
+                          <strong className="stat-value">${(portfolioData.portfolio.total_budget / 1000).toFixed(1)}K</strong>
+                        </div>
+                        <div className="portfolio-stat-card">
+                          <span className="stat-label">Avg ROI</span>
+                          <strong className="stat-value" style={{ color: "#10b981" }}>{portfolioData.portfolio.avg_roi}x</strong>
+                        </div>
+                        <div className="portfolio-stat-card">
+                          <span className="stat-label">Portfolio Health</span>
+                          <strong className="stat-value">{portfolioData.portfolio.portfolio_health}</strong>
+                        </div>
+                      </div>
+
+                      {/* Performance Rank */}
+                      <div style={{ marginTop: "1.5rem", padding: "1rem", background: "rgba(99,102,241,0.1)", borderRadius: "12px", border: "1px solid rgba(99,102,241,0.2)" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div>
+                            <h4 style={{ margin: "0 0 0.25rem 0", color: "#a5b4fc" }}>Performance Rank</h4>
+                            <p style={{ margin: "0", color: "var(--muted)", fontSize: "0.9rem" }}>{portfolioData.performance_rank.rank}</p>
+                          </div>
+                          <div style={{ textAlign: "right" }}>
+                            <div style={{ fontSize: "1.8rem", fontWeight: "800", color: "#a5b4fc" }}>{portfolioData.performance_rank.percentile}th</div>
+                            <p style={{ margin: "0", fontSize: "0.8rem", color: "var(--muted)" }}>percentile</p>
+                          </div>
+                        </div>
+                        <p style={{ margin: "0.75rem 0 0 0", fontSize: "0.85rem", color: "var(--muted)", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "0.75rem" }}>{portfolioData.performance_rank.insight}</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Portfolio Tabs */}
+                {portfolioData && (
+                  <>
+                    <div className="portfolio-tabs">
+                      {[
+                        { id: "overview", label: "📊 Platform Performance" },
+                        { id: "budget", label: "💰 Budget Allocation" },
+                        { id: "benchmarks", label: "🏆 Industry Benchmarks" },
+                        { id: "seasonal", label: "📅 Seasonal Trends" },
+                        { id: "scaling", label: "🚀 Scaling Timeline" },
+                        { id: "risk", label: "⚠️ Risk/Reward" },
+                        { id: "market", label: "🌍 Market Timing" }
+                      ].map(tab => (
+                        <button
+                          key={tab.id}
+                          className={`portfolio-tab-btn${portfolioTab === tab.id ? " active" : ""}`}
+                          onClick={() => setPortfolioTab(tab.id)}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Platform Performance */}
+                    {portfolioTab === "overview" && (
+                      <div className="card" style={{ marginBottom: "1.5rem" }}>
+                        <h2>Platform Performance Summary</h2>
+                        <div className="platform-perf-grid">
+                          {portfolioData.platform_performance.map((p, idx) => (
+                            <div key={p.platform} className={`platform-perf-card${idx === 0 ? " top-platform" : ""}`}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: "0.75rem" }}>
+                                <h3 style={{ margin: "0" }}>{p.platform}</h3>
+                                {p.is_launched && <span style={{ fontSize: "1.2rem" }}>✓</span>}
+                              </div>
+                              <div className="perf-metric">
+                                <span>Avg ROI</span>
+                                <strong style={{ fontSize: "1.5rem", color: "#10b981" }}>{p.avg_roi}x</strong>
+                              </div>
+                              <div className="perf-metric">
+                                <span>Campaigns</span>
+                                <strong>{p.campaigns_count}</strong>
+                              </div>
+                              <div className="perf-metric">
+                                <span>Total Budget</span>
+                                <strong>${(p.total_budget / 1000).toFixed(0)}K</strong>
+                              </div>
+                              <div style={{ marginTop: "0.75rem", padding: "0.5rem", background: "rgba(0,0,0,0.2)", borderRadius: "6px", fontSize: "0.8rem", color: "#94a3b8" }}>
+                                {p.performance_trend}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        {portfolioData.competitive_insights && (
+                          <div style={{ marginTop: "1.5rem", padding: "1rem", background: "rgba(236,72,153,0.1)", borderRadius: "10px", border: "1px solid rgba(236,72,153,0.2)" }}>
+                            <h4 style={{ margin: "0 0 0.5rem 0", color: "#ec4899" }}>💡 Competitive Insight</h4>
+                            <p style={{ margin: "0", fontSize: "0.9rem" }}>{portfolioData.competitive_insights.opportunities}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Budget Allocation */}
+                    {portfolioTab === "budget" && (
+                      <div className="card" style={{ marginBottom: "1.5rem" }}>
+                        <h2>💰 Recommended Budget Allocation</h2>
+                        <div className="budget-allocation-list">
+                          {portfolioData.budget_allocation.map((b, idx) => (
+                            <div key={b.platform} className="budget-alloc-item">
+                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+                                <span style={{ fontWeight: "600" }}>{b.platform}</span>
+                                <strong style={{ color: "#a5b4fc", fontSize: "1.1rem" }}>{b.recommended_allocation}%</strong>
+                              </div>
+                              <div style={{ width: "100%", height: "8px", background: "rgba(0,0,0,0.2)", borderRadius: "4px", overflow: "hidden" }}>
+                                <div style={{ width: `${b.recommended_allocation}%`, height: "100%", background: `linear-gradient(90deg, #${Math.floor(Math.random()*16777215).toString(16)}, #6366f1)` }} />
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "space-between", marginTop: "0.5rem", fontSize: "0.8rem", color: "var(--muted)" }}>
+                                <span>Expected ROI: {b.expected_roi}x</span>
+                                <span>{b.rationale}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Industry Benchmarks */}
+                    {portfolioTab === "benchmarks" && (
+                      <div className="card" style={{ marginBottom: "1.5rem" }}>
+                        <h2>🏆 Industry Benchmarks</h2>
+                        <div className="benchmark-grid">
+                          {Object.entries(portfolioData.industry_benchmarks).map(([metric, data]) => (
+                            <div key={metric} className="benchmark-card">
+                              <h4 style={{ textTransform: "uppercase", color: "var(--muted)", fontSize: "0.75rem", letterSpacing: "0.1em", margin: "0 0 1rem 0" }}>{metric}</h4>
+                              <div className="benchmark-row">
+                                <span>Industry Average</span>
+                                <strong style={{ color: "#94a3b8" }}>{data.average}</strong>
+                              </div>
+                              <div className="benchmark-row">
+                                <span>Top Performer</span>
+                                <strong style={{ color: "#10b981" }}>{data.top_performer}</strong>
+                              </div>
+                              <div className="benchmark-row" style={{ borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "0.75rem", marginTop: "0.75rem" }}>
+                                <span>Your Performance</span>
+                                <strong style={{ color: data.your_performance >= data.average ? "#10b981" : "#f59e0b" }}>{data.your_performance}</strong>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Seasonal Trends */}
+                    {portfolioTab === "seasonal" && (
+                      <div className="card" style={{ marginBottom: "1.5rem" }}>
+                        <h2>📅 Seasonal Trends & Opportunities</h2>
+                        <div className="seasonal-list">
+                          {portfolioData.seasonal_trends.map(season => (
+                            <div key={season.month} className="seasonal-item">
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+                                <strong>{season.month}</strong>
+                                <span style={{ fontSize: "0.9rem", color: season.opportunity.includes("High") ? "#10b981" : season.opportunity.includes("Low") ? "#ef4444" : "#94a3b8" }}>{season.opportunity}</span>
+                              </div>
+                              <p style={{ margin: "0", fontSize: "0.85rem", color: "var(--muted)" }}>{season.campaigns} campaigns • Avg ROI: {season.avg_roi}x</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Scaling Timeline */}
+                    {portfolioTab === "scaling" && (
+                      <div className="card" style={{ marginBottom: "1.5rem" }}>
+                        <h2>🚀 Scaling Timeline to Goals</h2>
+                        <div className="timeline-list">
+                          {portfolioData.scaling_timelines.map((t, idx) => (
+                            <div key={idx} className="timeline-item">
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: "0.75rem" }}>
+                                <div>
+                                  <h4 style={{ margin: "0 0 0.25rem 0" }}>Goal: {t.goal}</h4>
+                                  <p style={{ margin: "0", fontSize: "0.85rem", color: "var(--muted)" }}>⏱️ {t.months_to_reach} months</p>
+                                </div>
+                                <strong style={{ color: "#a5b4fc" }}>${t.recommended_budget.toLocaleString()}</strong>
+                              </div>
+                              <p style={{ margin: "0", fontSize: "0.85rem", color: "#cbd5e1" }}>{t.timeline_description}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Risk/Reward */}
+                    {portfolioTab === "risk" && (
+                      <div className="card" style={{ marginBottom: "1.5rem" }}>
+                        <h2>⚠️ Risk/Reward Analysis</h2>
+                        <div className="risk-grid">
+                          {portfolioData.risk_reward_analysis.map((r, idx) => (
+                            <div key={idx} className="risk-card">
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+                                <strong>{r.budget_increase}</strong>
+                                <span style={{ padding: "0.25rem 0.75rem", borderRadius: "999px", fontSize: "0.75rem", background: r.risk_level === "Low" ? "rgba(16,185,129,0.15)" : r.risk_level === "Medium" ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.15)", color: r.risk_level === "Low" ? "#10b981" : r.risk_level === "Medium" ? "#f59e0b" : "#ef4444", fontWeight: "600" }}>{r.risk_level} Risk</span>
+                              </div>
+                              <div className="risk-metric">
+                                <span>New Budget</span>
+                                <strong>${r.new_budget.toLocaleString()}</strong>
+                              </div>
+                              <div className="risk-metric">
+                                <span>Projected ROI</span>
+                                <strong style={{ color: "#10b981" }}>${r.projected_roi.toLocaleString()}</strong>
+                              </div>
+                              <div className="risk-metric">
+                                <span>Additional Revenue</span>
+                                <strong>${r.additional_revenue.toLocaleString()}</strong>
+                              </div>
+                              <div style={{ marginTop: "0.75rem", padding: "0.5rem", background: "rgba(0,0,0,0.2)", borderRadius: "6px", fontSize: "0.8rem", color: "#94a3b8", textAlign: "center" }}>
+                                {r.confidence} Confidence
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Market Timing */}
+                    {portfolioTab === "market" && (
+                      <div className="card" style={{ marginBottom: "1.5rem" }}>
+                        <h2>🌍 Market Timing & Insights</h2>
+                        <div className="market-insights-box">
+                          {Object.entries(portfolioData.market_timing).map(([key, value]) => (
+                            <div key={key} className="market-insight-item">
+                              <span style={{ textTransform: "capitalize", fontWeight: "600", color: "#a5b4fc" }}>
+                                {key.replace(/_/g, " ")}
+                              </span>
+                              <p style={{ margin: "0.5rem 0 0 0", fontSize: "0.95rem", color: "#cbd5e1" }}>{value}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                <hr style={{ margin: "2rem 0", border: "none", borderTop: "1px solid var(--border)" }} />
+
                 {/* Campaign List */}
                 <div className="card" style={{ marginBottom: "1.5rem" }}>
                   <h2>Select a Campaign to Analyze</h2>
@@ -1200,11 +1608,35 @@ export default function App() {
             <div className="settings-grid">
               <div className="card"><h2>Account</h2><div className="settings-field"><label>Email</label><input type="email" value={user?.email || ""} disabled /></div><div className="settings-field"><label>Member since</label><input type="text" value={user?.created_at ? fmt(user.created_at) : "—"} disabled /></div><div className="settings-field"><label>Account ID</label><input type="text" value={user?.id || "—"} disabled /></div></div>
               <div className="card"><h2>Platform Credentials</h2><p className="subtext" style={{ marginBottom: "1rem" }}>API credentials are configured via environment variables on the server for security.</p>{[{ label: "Google Ads", fields: ["CUSTOMER_ID", "DEVELOPER_TOKEN", "CLIENT_ID", "REFRESH_TOKEN"], status: "✅ Configured via .env" }, { label: "Meta Ads (Facebook/Instagram)", fields: ["ACCESS_TOKEN", "AD_ACCOUNT_ID"], status: "✅ Configured via .env" }, { label: "LinkedIn Ads", fields: ["LINKEDIN_ACCESS_TOKEN", "ACCOUNT_ID"], status: "⚙️ Coming soon" }].map(p => (<div key={p.label} className="platform-settings-item"><div className="psi-header"><strong>{p.label}</strong><span className="psi-status">{p.status}</span></div><div className="psi-fields">{p.fields.map(f => <code key={f}>{f}</code>)}</div></div>))}</div>
-              <div className="card"><h2>About</h2><p className="subtext">NexusAds is an AI-powered digital marketing automation agent that autonomously plans, launches, optimizes, and scales paid ad campaigns across LinkedIn Ads, Meta Ads (Facebook/Instagram), and Google Ads, using a free/open MCP (Model Context Protocol) server as the orchestration backbone.</p><div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>{"Google Ads · Meta Ads · LinkedIn Ads · MCP · AI Planning".split(" · ").map(t => <span key={t} className="platform-chip">{t}</span>)}</div></div>
+              <div className="card"><h2>About</h2><p className="subtext">Smart Ads is an AI-powered digital marketing automation agent that autonomously plans, launches, optimizes, and scales paid ad campaigns across LinkedIn Ads, Meta Ads (Facebook/Instagram), and Google Ads, using a free/open MCP (Model Context Protocol) server as the orchestration backbone.</p><div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>{"Google Ads · Meta Ads · LinkedIn Ads · MCP · AI Planning".split(" · ").map(t => <span key={t} className="platform-chip">{t}</span>)}</div></div>
             </div>
           </div>
         )}
       </main>
+
+      {/* Professional Footer */}
+      <footer className="app-footer">
+        <div className="footer-content">
+          <div className="footer-left">
+            <div className="footer-brand"><span className="footer-logo">🚀</span><span className="footer-title">Smart Ads</span></div>
+            <p className="footer-tagline">AI-Powered Digital Marketing Automation</p>
+          </div>
+          <div className="footer-middle">
+            <div className="footer-links">
+              <a href="#" onClick={e => {e.preventDefault()}}>Documentation</a>
+              <span className="footer-sep">•</span>
+              <a href="#" onClick={e => {e.preventDefault()}}>Support</a>
+              <span className="footer-sep">•</span>
+              <a href="#" onClick={e => {e.preventDefault()}}>Status</a>
+            </div>
+          </div>
+          <div className="footer-right">
+            <p className="footer-copyright">© 2025 Smart Ads. All rights reserved.</p>
+            <p className="footer-version">v1.0 • Built with AI & MCP</p>
+          </div>
+        </div>
+      </footer>
+      </div>
     </div>
   );
 }

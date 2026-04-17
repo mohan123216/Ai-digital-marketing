@@ -40,6 +40,7 @@ export const api = {
   getProductTypes: () => request("/api/v1/product-types"),
   getHistory: (token) => request("/api/v1/history", token),
   getCampaignScaleupAnalysis: (token, campaignId) => request(`/api/v1/scaleup/campaign/${campaignId}/analysis`, token),
+  getPortfolioAnalysis: (token) => request("/api/v1/scaleup/portfolio-analysis", token),
   createRecommendation: (token, payload) =>
     request("/api/v1/recommendations", token, {
       method: "POST",
@@ -120,4 +121,32 @@ export const api = {
         user_overrides: userOverrides,
       }),
     }),
+  
+  // ── Pause/Resume Campaign (Google Ads) ──────────────────────────────────────
+  pauseGoogleAdsCampaign: (token, resourceName, dryRun = false) =>
+    request(`/api/v1/google-ads/${encodeURIComponent(resourceName)}/pause`, token, {
+      method: "POST",
+      body: JSON.stringify({ dry_run: dryRun }),
+    }),
+  resumeGoogleAdsCampaign: (token, resourceName, dryRun = false) =>
+    request(`/api/v1/google-ads/${encodeURIComponent(resourceName)}/resume`, token, {
+      method: "POST",
+      body: JSON.stringify({ dry_run: dryRun }),
+    }),
+  getGoogleAdsCampaignStatus: (token, resourceName) =>
+    request(`/api/v1/google-ads/${encodeURIComponent(resourceName)}/status`, token),
+
+  // ── Pause/Resume Campaign (Meta Ads) ────────────────────────────────────────
+  pauseMetaAdsCampaign: (token, metaCampaignId, dryRun = false) =>
+    request(`/api/v1/meta-ads/${encodeURIComponent(metaCampaignId)}/pause`, token, {
+      method: "POST",
+      body: JSON.stringify({ dry_run: dryRun }),
+    }),
+  resumeMetaAdsCampaign: (token, metaCampaignId, dryRun = false) =>
+    request(`/api/v1/meta-ads/${encodeURIComponent(metaCampaignId)}/resume`, token, {
+      method: "POST",
+      body: JSON.stringify({ dry_run: dryRun }),
+    }),
+  getMetaAdsCampaignStatus: (token, metaCampaignId) =>
+    request(`/api/v1/meta-ads/${encodeURIComponent(metaCampaignId)}/status`, token),
 };

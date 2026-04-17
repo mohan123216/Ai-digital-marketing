@@ -483,18 +483,71 @@ def get_recommendation_launch_status(campaign_id: str, recommendation: Dict[str,
 
 
 def _main() -> None:
-    parser = argparse.ArgumentParser(description="Launch selected Meta recommendation once.")
-    parser.add_argument("--campaign-id", type=str, required=True, help="Campaign ID")
-    parser.add_argument("--recommendation-json", type=str, required=True, help="Recommendation JSON")
-    parser.add_argument("--dry-run", action="store_true", help="Simulate launch without Meta API call")
+    parser = argparse.ArgumentParser(description="Meta campaign management (launch, pause, resume).")
+    subparsers = parser.add_subparsers(dest="command", help="Command to execute")
+
+    # Launch command
+    launch_parser = subparsers.add_parser("launch", help="Launch a new campaign")
+    launch_parser.add_argument("--campaign-id", type=str, required=True, help="Campaign ID")
+    launch_parser.add_argument("--recommendation-json", type=str, required=True, help="Recommendation JSON")
+    launch_parser.add_argument("--dry-run", action="store_true", help="Simulate launch without Meta API call")
+
+    # Pause command
+    pause_parser = subparsers.add_parser("pause", help="Pause a campaign")
+    pause_parser.add_argument("--meta-campaign-id", type=str, required=True, help="Meta campaign ID")
+    pause_parser.add_argument("--dry-run", action="store_true", help="Simulate pause without API call")
+
+    # Resume command
+    resume_parser = subparsers.add_parser("resume", help="Resume a paused campaign")
+    resume_parser.add_argument("--meta-campaign-id", type=str, required=True, help="Meta campaign ID")
+    resume_parser.add_argument("--dry-run", action="store_true", help="Simulate resume without API call")
+
+    # Status command
+    status_parser = subparsers.add_parser("status", help="Get campaign status")
+    status_parser.add_argument("--meta-campaign-id", type=str, required=True, help="Meta campaign ID")
+
     args = parser.parse_args()
 
-    result = launch_selected_recommendation(
-        campaign_id=args.campaign_id,
-        recommendation=json.loads(args.recommendation_json),
-        dry_run=args.dry_run,
-    )
-    print(json.dumps(result, indent=2))
+    if args.command == "launch":
+        result = launch_selected_recommendation(
+            campaign_id=args.campaign_id,
+            recommendation=json.loads(args.recommendation_json),
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "pause":
+        from meta_mcp.pause import pause_campaign
+        result = pause_campaign(
+            meta_campaign_id=args.meta_campaign_id,
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "resume":
+        from meta_mcp.pause import resume_campaign
+        result = resume_campaign(
+            meta_campaign_id=args.meta_campaign_id,
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "status":
+        from meta_mcp.pause import get_campaign_status
+        result = get_campaign_status(meta_campaign_id=args.meta_campaign_id)
+        print(json.dumps(result, indent=2))
+
+    else:
+        # Default to launch for backward compatibility
+        if not args.campaign_id or not args.recommendation_json:
+            parser.print_help()
+            return
+        result = launch_selected_recommendation(
+            campaign_id=args.campaign_id,
+            recommendation=json.loads(args.recommendation_json),
+            dry_run=getattr(args, 'dry_run', False),
+        )
+        print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

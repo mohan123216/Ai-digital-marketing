@@ -190,10 +190,36 @@ class MetaAdsLaunchStatusRequest(BaseModel):
 
 # ─── Ad Launch Schemas ──────────────────────────────────────────────────────
 
+class GenerateAdContentRequest(BaseModel):
+    """Request to generate ad content using LLM."""
+    product_name: str = Field(..., description="Product or service name")
+    campaign_title: Optional[str] = Field(None, description="Campaign title for context")
+    target_audience: Optional[str] = Field(None, description="Target audience description")
+    ad_text: Optional[str] = Field(None, description="Additional marketing text or ad copy")
+    campaign_goal: Optional[str] = Field(None, description="Campaign goal (roi, conversions, traffic, etc.)")
+
+
+class GeneratedAdContent(BaseModel):
+    """Generated ad content from LLM."""
+    headlines: List[str] = Field(..., description="Generated headlines (up to 5)")
+    keywords: List[str] = Field(..., description="Generated keywords (up to 15)")
+    descriptions: List[str] = Field(..., description="Generated descriptions (up to 3)")
+
+
 class LaunchAdRequest(BaseModel):
     """Payload for launching a new ad inside an already-launched campaign."""
     ad_name: Optional[str] = Field(None, description="Friendly name for this ad (optional)")
     ad_type: str = Field("text", description="Ad type: 'text', 'image', or 'video'")
+    
+    # LLM Generation Parameters
+    generate_with_llm: bool = Field(False, description="If true, generate headlines/keywords/descriptions using LLM")
+    product_name: Optional[str] = Field(None, description="Product name for LLM generation")
+    campaign_title: Optional[str] = Field(None, description="Campaign title for LLM generation context")
+    target_audience: Optional[str] = Field(None, description="Target audience description for LLM generation")
+    ad_text: Optional[str] = Field(None, description="Marketing text for LLM generation")
+    campaign_goal: Optional[str] = Field(None, description="Campaign goal for LLM generation")
+    
+    # Manual Ad Content
     headline_1: Optional[str] = Field(None, max_length=30, description="Headline 1 (max 30 chars)")
     headline_2: Optional[str] = Field(None, max_length=30, description="Headline 2 (max 30 chars)")
     headline_3: Optional[str] = Field(None, max_length=30, description="Headline 3 (max 30 chars)")
